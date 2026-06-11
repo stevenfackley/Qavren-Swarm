@@ -112,7 +112,7 @@ them. There is no server to host and no external `docker build` step.
 | `claude-code` subscription rate limit exhausted by a swarm | Medium | Medium | Per‑spawn fallback to `openai`/local; usage is the user's own. |
 | Broker reachable on an untrusted LAN | Low | High | Bearer token + `--disallowedTools`; firewall to Docker subnet or disable broker. |
 | `anthropic` key forwarded into a container | Low | High | Prefer `claude-code`/`openai`; scope/rotate the key; the container is ephemeral and cap‑dropped. |
-| Jobs lost on server restart (in‑memory) | High | Low | Re‑spawn; acceptable for an interactive tool. |
+| Jobs lost on server restart | Low | Low | Resolved: jobs persist to `QAVREN_JOBS_DIR`; in‑flight jobs reload as "interrupted". |
 | Poor edit quality from weak local models | Medium | Low | One retry pass; context budget; choose a stronger model/provider. |
 | First‑run image build latency | High | Low | One‑time per runtime; cached thereafter. |
 | Untrusted workspace runs hostile test scripts | Medium | Medium | `--ignore-scripts`, timeouts, hardened/non‑root container, optional no‑egress. |
@@ -124,5 +124,5 @@ them. There is no server to host and no external `docker build` step.
 - **Branching:** the genesis commit is on `main`; subsequent changes go through a feature branch and
   a squash‑merged PR (workspace convention).
 - **Roadmap (candidate, see PRD §11):** additional providers via the existing seam; multi‑round
-  agentic editing; job persistence; CI for the integration/security verifications; fuzzy hunk
-  matching.
+  agentic editing; CI for the integration/security verifications. (CI, CodeQL, Dependabot, fuzzy
+  hunk matching, per‑call `baseUrl`, `retrieve_logs`, and job persistence have shipped.)

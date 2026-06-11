@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace QavrenSwarm.Services;
 
 public enum JobStatus
@@ -32,5 +34,6 @@ public sealed class JobState
 
     /// <summary>Cancellation handle for this job's background run — drives the wall-clock
     /// timeout and the cancel_job tool. Not serialized; nulled + disposed once the run ends.</summary>
+    [JsonIgnore]
     public CancellationTokenSource? Cts { get; set; }
 }

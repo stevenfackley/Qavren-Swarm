@@ -71,15 +71,20 @@ never an env var). See §11 for the full variable list.
 ### 4.3 `Services/JobState.cs` + `JobStateStore.cs`
 
 `JobStatus` enum: `Pending | Running | Completed | Failed`. `JobState` is the mutable per‑job record
-(see §5). `JobStateStore` wraps a `ConcurrentDictionary<string, JobState>`:
+(see §5). `JobStateStore` wraps a `ConcurrentDictionary<string, JobState>` and, when
+`QAVREN_PERSIST_JOBS` is on, mirrors each job to `QAVREN_JOBS_DIR` as one JSON file:
 
-- `Create(...)` mints a GUID‑`N` id; calls `EvictFinishedIfFull()` first.
+- `Create(...)` mints a GUID‑`N` id; calls `EvictFinishedIfFull()`; persists the new job.
 - `EvictFinishedIfFull()` caps the store at `MaxJobs = 200`, removing the oldest **finished**
-  (`Completed`/`Failed`) jobs by `FinishedUtc ?? CreatedUtc`. Pending/Running are never evicted.
-- `TryGet(id, out job)` for reads.
-- `Update(id, Action<JobState>)` mutates under `lock (job)` so the background runner's multi‑field
-  writes are atomic with respect to one another.
+  (`Completed`/`Failed`) jobs by `FinishedUtc ?? CreatedUtc` (and deleting their files). Pending/Running
+  are never evicted.
+- `Update(id, Action<JobState>)` mutates under `lock (job)` and re‑persists, so the background runner's
+  multi‑field writes are atomic and the on‑disk copy tracks memory.
 - `All()` returns a snapshot array for `list_jobs`.
+- **On construction**, `LoadFromDisk()` reads every `*.json`; a job still `Pending`/`Running` (its
+  container and background task gone with the previous process) is marked `Failed` with
+  "interrupted by server restart". `JobState.Cts` is `[JsonIgnore]`d; the enum persists as a string.
+  Completed jobs (and their diffs) reload intact, so `retrieve_diff`/`apply_diff` work after a restart.
 
 ### 4.4 `Services/DockerLifecycleManager.cs`
 
@@ -335,6 +340,6 @@ variables, their defaults, and purposes.
 
 ## 15. Known limitations
 
-Jobs are in‑memory only (lost on restart); one retry pass only; relevance heuristic is filename‑based;
-`anthropic` forwards a long‑lived key into the container; broker binds `0.0.0.0`. See the PRD §11 and
-SECURITY.md residual risks.
+One retry pass only; relevance heuristic is filename‑based; `anthropic` forwards a long‑lived key into
+the container; broker binds `0.0.0.0`. (Jobs now persist to disk and survive restarts.) See the PRD
+§11 and SECURITY.md residual risks.

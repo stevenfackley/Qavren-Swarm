@@ -111,9 +111,8 @@ and lock the user into one model/provider and one harness.
 
 ## 11. Out of scope / future
 
-- Multi‑file fuzzy patching, multi‑round agentic loops beyond one retry.
-- Persisting jobs across restarts.
-- A `list_jobs` retention/eviction policy beyond the current count cap.
+- Multi‑round agentic loops beyond one retry.
+- A retention policy beyond the current count cap (oldest‑finished eviction at 200 jobs).
 - Additional providers (e.g. Gemini) — additive via the existing provider seam.
 
 See the [SDD](SDD.md) for how these requirements are realized and the [STD](STD.md) for verification.
