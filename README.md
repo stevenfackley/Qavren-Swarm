@@ -1,5 +1,8 @@
 # Qavren Swarm
 
+[![CI](https://github.com/stevenfackley/Qavren-Swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/stevenfackley/Qavren-Swarm/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A local **Model Context Protocol (MCP)** server that orchestrates ephemeral, hardened Docker
 containers as disposable coding agents. An IDE harness (Claude Code, OpenCode, Cline, …) talks
 JSON‑RPC over **stdio**; each task spawns a throwaway Linux container that edits a **read‑only
