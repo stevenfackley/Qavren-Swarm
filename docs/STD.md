@@ -85,7 +85,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 
 | ID | Scenario | Result |
 |----|----------|--------|
-| IV‑1 | MCP handshake over stdio; `tools/list` | 6 tools enumerate; **0 non‑JSON lines on stdout** (logs on stderr) |
+| IV‑1 | MCP handshake over stdio; `tools/list` | 7 tools enumerate; **0 non‑JSON lines on stdout** (logs on stderr) |
 | IV‑2 | Broker `GET /healthz`; unauthenticated `POST /v1/chat/completions` | 200; **401** without bearer |
 | IV‑3 | Server builds `qavren-agent-python:latest` from the embedded tar | image built; no external `docker build` |
 | IV‑4 | Agent run with no task | emits valid nonce envelope + `QAVREN_RESULT`, exit 2 |

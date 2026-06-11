@@ -143,7 +143,7 @@ Host‑side OpenAI‑compatible shim bridging to `claude -p`.
 
 ### 4.6 `Tools/SwarmTools.cs` (`[McpServerToolType]`)
 
-DI‑injected (`JobStateStore`, `DockerLifecycleManager`, `SwarmConfig`, `ILogger`). Six tools (§6.1).
+DI‑injected (`JobStateStore`, `DockerLifecycleManager`, `SwarmConfig`, `ILogger`). Seven tools (§6.1).
 Input‑validation failures `throw new McpException(...)` (surfaced as `isError`). `spawn_sandbox`
 creates a job, attaches a `CancellationTokenSource(JobTimeoutSeconds)` to it, and launches
 `RunAgentAsync` on a background `Task` (disposing the CTS in a `finally`). `apply_diff` writes the
@@ -215,6 +215,7 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | `list_jobs` | — | `{count,jobs[]}` (newest first; `task` truncated to 80) | — |
 | `cancel_job` | `jobId` | `{jobId,cancelling}` or `{jobId,status,note}` | unknown jobId |
 | `retrieve_diff` | `jobId` | `{jobId,status,testsPassed,failedHunks,diff}` or running note | unknown jobId |
+| `retrieve_logs` | `jobId` | `{jobId,status,error,stderrTail}` (captured agent diagnostics) | unknown jobId |
 | `apply_diff` | `jobId` | `{jobId,applied,workspacePath}` or `{applied:false,note}` | unknown/non‑Completed jobId, `git apply` failure |
 
 ### 6.2 Broker HTTP API (OpenAI‑compatible)
