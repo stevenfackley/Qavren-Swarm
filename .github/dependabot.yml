@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # .NET packages (app + test project)
+  - package-ecosystem: "nuget"
+    directories:
+      - "/"
+      - "/tests"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      dotnet:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Python SDKs used by the agent images
+  - package-ecosystem: "pip"
+    directory: "/Agent"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # GitHub Actions used by the CI workflow (also keeps runner Node versions current)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
