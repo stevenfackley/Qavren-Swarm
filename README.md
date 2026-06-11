@@ -183,6 +183,8 @@ Server‑side (read once at startup):
 | `QAVREN_MEMORY_MB` | `2048` | container memory cap |
 | `QAVREN_CPUS` | `2` | container CPU cap |
 | `QAVREN_NETWORK_MODE` | _(bridge)_ | set `none` for offline / local‑only runs |
+| `QAVREN_PERSIST_JOBS` | `true` | persist jobs to disk so they (and their diffs) survive a restart |
+| `QAVREN_JOBS_DIR` | `<bin>/jobs` | where job state is persisted (one JSON file per job) |
 | `QAVREN_LOG_FILE` | `<bin>/logs/qavren.log` | log file (stdout is reserved for JSON‑RPC) |
 
 Agent‑side (forwarded into the container only when set in the server environment):

@@ -24,6 +24,8 @@ public sealed class SwarmConfig
     public long MemoryBytes { get; }
     public long NanoCpus { get; }
     public string? NetworkMode { get; }
+    public bool PersistJobs { get; }
+    public string JobsDir { get; }
 
     public SwarmConfig()
     {
@@ -45,6 +47,8 @@ public sealed class SwarmConfig
         MemoryBytes = (long)ParseInt("QAVREN_MEMORY_MB", 2048) * 1024 * 1024; // OOM guard (0 = unlimited)
         NanoCpus = (long)(ParseDouble("QAVREN_CPUS", 2.0) * 1_000_000_000d);  // CPU cap (0 = unlimited)
         NetworkMode = Environment.GetEnvironmentVariable("QAVREN_NETWORK_MODE"); // null=bridge; "none" for offline
+        PersistJobs = ParseBool("QAVREN_PERSIST_JOBS", true);                 // jobs survive restarts
+        JobsDir = Env("QAVREN_JOBS_DIR", Path.Combine(AppContext.BaseDirectory, "jobs"));
     }
 
     private static string Env(string key, string fallback) =>

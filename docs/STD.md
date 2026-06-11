@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (10, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (12, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -63,6 +63,13 @@ providers and the security/robustness controls.
 | 9 | `Openai_uses_per_call_baseurl_override` | a per‑call `baseUrl` overrides `OPENAI_BASE_URL` |
 | 10 | `Openai_without_override_uses_a_default_base_url` | falls back to the configured default |
 
+`JobStateStore` (`tests/JobPersistenceTests.cs`) — disk persistence:
+
+| # | Test | Verifies |
+|---|------|----------|
+| 11 | `Jobs_survive_a_restart_and_inflight_jobs_are_marked_interrupted` | a Completed job + diff reload after restart; an in‑flight job becomes `Failed`/interrupted |
+| 12 | `Persistence_disabled_writes_nothing` | `QAVREN_PERSIST_JOBS=false` writes no files |
+
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
 | # | Test | Verifies |
@@ -77,7 +84,7 @@ providers and the security/robustness controls.
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 10 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 12 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -101,6 +108,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 | IV‑14 | Context budget forwarding (`QAVREN_CONTEXT_BUDGET=40`) | agent inlines 3 files, **omits 2**, logs the budget decision |
 | IV‑15 | Bad input (`runtime:"ruby"`) | tool response carries **`isError: true`** |
 | IV‑16 | Post‑run resource check | no orphaned containers or `dotnet` server processes |
+| IV‑17 | Persistence across a real server restart | a Completed job + its diff reload (identical) in a fresh process on the same `QAVREN_JOBS_DIR`; in‑flight jobs reload as interrupted |
 
 ## 6. Negative / security tests
 
@@ -126,12 +134,12 @@ python -m pytest tests/test_agent.py          # 6 passed
 | NFR‑1 (hardening) | IV‑10 |
 | NFR‑2 (stdout purity, nonce, CRLF) | IV‑1, IV‑6, unit #2/#3 |
 | NFR‑3 (timeouts/robustness) | IV‑11 |
-| NFR‑7 (testability) | §4 (16 automated tests) |
+| NFR‑7 (testability) | §4 (18 automated tests) |
 
 ## 8. Results summary
 
-- **Automated:** 10/10 xUnit + 6/6 pytest passing.
-- **Integration:** IV‑1…IV‑16 all pass; no resource leaks.
+- **Automated:** 12/12 xUnit + 6/6 pytest passing.
+- **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.
 
