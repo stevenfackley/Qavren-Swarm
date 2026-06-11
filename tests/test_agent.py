@@ -45,6 +45,20 @@ def test_apply_edits_creates_new_file_lf():
     assert (WORK / "new.py").read_bytes() == b"print(1)\n"
 
 
+def test_apply_edits_fuzzy_matches_wrong_indentation():
+    # The model de-indented the block (a common weak-model error). Exact match fails,
+    # but the whitespace-tolerant fallback matches and re-indents to the file's 8 spaces.
+    (WORK / "m.py").write_bytes(b"class C:\n    def f(self):\n        return 1\n")
+    out = ("FILE: m.py\n<<<<<<< SEARCH\n"
+           "def f(self):\n    return 1\n"
+           "=======\n"
+           "def f(self):\n    return 2\n"
+           ">>>>>>> REPLACE\n")
+    applied, failed = agent.apply_edits(out)
+    assert applied == 1 and failed == []
+    assert (WORK / "m.py").read_bytes() == b"class C:\n    def f(self):\n        return 2\n"
+
+
 def test_apply_edits_reports_nonmatching_hunk():
     (WORK / "a.py").write_bytes(b"x = 1\n")
     out = "FILE: a.py\n<<<<<<< SEARCH\nTOTALLY_ABSENT\n=======\ny\n>>>>>>> REPLACE\n"

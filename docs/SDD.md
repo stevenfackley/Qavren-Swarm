@@ -169,9 +169,11 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
    extended thinking with `max_tokens > budget`) or `openai` (base‑url SDK — also serves the
    `claude-code` broker and local models).
 4. **Apply edits.** `apply_edits` parses SEARCH/REPLACE blocks (`BLOCK_RE`), enforces containment via
-   `Path.is_relative_to(WORK)`, matches SEARCH text (LF‑normalized), and writes back preserving the
-   file's original line ending (`detect_newline` + `write_preserving`). Returns
-   `(applied, failed[])`.
+   `Path.is_relative_to(WORK)`, and applies each edit: an **exact** substring match first, then a
+   whitespace‑tolerant **`fuzzy_replace`** fallback (matches lines ignoring leading/trailing
+   whitespace and re‑indents REPLACE to the file's actual indentation — the common weak‑model
+   "right lines, wrong indent" failure). Writes back preserving the file's line ending
+   (`detect_newline` + `write_preserving`). Returns `(applied, failed[])`.
 5. **Retry (once).** For hunks failing with "search not found"/"file missing", re‑prompt with the
    current file content (`build_retry_prompt`) and re‑apply.
 6. **Test.** `run_tests`: `npm install --ignore-scripts` + `npm test` (if `package.json` has a test

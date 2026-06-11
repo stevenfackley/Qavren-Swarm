@@ -63,21 +63,22 @@ providers and the security/robustness controls.
 | 9 | `Openai_uses_per_call_baseurl_override` | a per‑call `baseUrl` overrides `OPENAI_BASE_URL` |
 | 10 | `Openai_without_override_uses_a_default_base_url` | falls back to the configured default |
 
-### 4.2 pytest — `tests/test_agent.py` (5, all passing)
+### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
 | # | Test | Verifies |
 |---|------|----------|
 | 1 | `test_block_re_parses_edit_and_new_file` | `BLOCK_RE` parses both an edit and an empty‑SEARCH (new file) block |
 | 2 | `test_apply_edits_preserves_crlf` | editing a CRLF file keeps CRLF (no whole‑file LF flip) |
 | 3 | `test_apply_edits_creates_new_file_lf` | empty SEARCH creates a new LF file |
-| 4 | `test_apply_edits_reports_nonmatching_hunk` | unmatched SEARCH recorded as `search not found`, nothing written |
-| 5 | `test_containment_rejects_escape_and_writes_nothing` | `../evil.py` rejected as out‑of‑tree; no file created |
+| 4 | `test_apply_edits_fuzzy_matches_wrong_indentation` | de‑indented SEARCH (exact‑fail) is fuzzy‑matched and re‑indented to the file |
+| 5 | `test_apply_edits_reports_nonmatching_hunk` | unmatched SEARCH recorded as `search not found`, nothing written |
+| 6 | `test_containment_rejects_escape_and_writes_nothing` | `../evil.py` rejected as out‑of‑tree; no file created |
 
 ### 4.3 Running
 
 ```powershell
 dotnet test tests/QavrenSwarm.Tests.csproj   # 10 passed
-python -m pytest tests/test_agent.py          # 5 passed
+python -m pytest tests/test_agent.py          # 6 passed
 ```
 
 ## 5. Integration verifications (manual, against real Docker)
@@ -125,11 +126,11 @@ python -m pytest tests/test_agent.py          # 5 passed
 | NFR‑1 (hardening) | IV‑10 |
 | NFR‑2 (stdout purity, nonce, CRLF) | IV‑1, IV‑6, unit #2/#3 |
 | NFR‑3 (timeouts/robustness) | IV‑11 |
-| NFR‑7 (testability) | §4 (15 automated tests) |
+| NFR‑7 (testability) | §4 (16 automated tests) |
 
 ## 8. Results summary
 
-- **Automated:** 10/10 xUnit + 5/5 pytest passing.
+- **Automated:** 10/10 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑16 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.
