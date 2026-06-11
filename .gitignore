@@ -1,0 +1,7 @@
+bin/
+obj/
+logs/
+*.user
+.vs/
+__pycache__/
+.pytest_cache/

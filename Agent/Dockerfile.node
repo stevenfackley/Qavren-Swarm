@@ -1,0 +1,18 @@
+# Qavren Swarm ephemeral agent — Node 22 runtime.
+# The container is disposable: it copies the mounted (read-only) workspace,
+# lets the model edit the copy, runs tests, and prints a git diff to stdout.
+FROM node:22-alpine
+
+# git for diffing; python3 + pip to run the agent.
+RUN apk add --no-cache git python3 py3-pip
+
+WORKDIR /app
+# Single source of truth for SDK versions, shared with Dockerfile.python.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
+COPY agent.py /app/agent.py
+
+# Run as the image's built-in non-root 'node' user; writable copy lives under /tmp.
+USER node
+ENV HOME=/home/node PYTHONUNBUFFERED=1
+ENTRYPOINT ["python3", "/app/agent.py"]
