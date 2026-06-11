@@ -41,10 +41,13 @@ public sealed class SwarmTools
         [Description("Natural-language coding task for the agent to perform.")] string task,
         [Description("Backend: 'anthropic', 'openai', or 'claude-code'. Defaults to the server default (claude-code).")] string? provider = null,
         [Description("Optional model id override for the chosen provider.")] string? model = null,
-        [Description("Optional extended-thinking token budget (anthropic provider only).")] int? thinkingBudget = null)
+        [Description("Optional extended-thinking token budget (anthropic provider only).")] int? thinkingBudget = null,
+        [Description("Optional OpenAI-compatible base URL override for the 'openai' provider only " +
+                     "(e.g. http://host.docker.internal:1234/v1). Ignored for other providers.")] string? baseUrl = null)
     {
         runtime = (runtime ?? "").Trim().ToLowerInvariant();
         provider = string.IsNullOrWhiteSpace(provider) ? _config.DefaultProvider : provider.Trim().ToLowerInvariant();
+        baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? null : baseUrl.Trim();
 
         if (!Runtimes.Contains(runtime))
             throw new McpException($"invalid runtime '{runtime}' (expected node|python)");
@@ -54,6 +57,8 @@ public sealed class SwarmTools
             throw new McpException($"workspacePath does not exist: '{workspacePath}'");
         if (string.IsNullOrWhiteSpace(task))
             throw new McpException("task must not be empty");
+        if (baseUrl is not null && !baseUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            throw new McpException($"baseUrl must be an http(s) URL: '{baseUrl}'");
 
         var job = _store.Create(runtime, provider, Path.GetFullPath(workspacePath), task);
         _log.LogInformation("Spawned job {Id} runtime={Runtime} provider={Provider}", job.Id, runtime, provider);
@@ -64,7 +69,7 @@ public sealed class SwarmTools
         job.Cts = cts;
         _ = Task.Run(async () =>
         {
-            try { await _docker.RunAgentAsync(_store, job, model, thinkingBudget, cts.Token); }
+            try { await _docker.RunAgentAsync(_store, job, model, thinkingBudget, baseUrl, cts.Token); }
             finally
             {
                 _store.Update(job.Id, j => j.Cts = null);

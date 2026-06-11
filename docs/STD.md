@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/ContractTests.cs` (8, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (10, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -56,6 +56,13 @@ providers and the security/robustness controls.
 | 7 | `Falls_back_to_assistant_text_when_no_result_field` | concatenates assistant text blocks as fallback |
 | 8 | `Non_json_returns_trimmed_raw` | non‑JSON stdout returned as trimmed text |
 
+`BuildEnv` (`tests/BuildEnvTests.cs`) — container environment assembly:
+
+| # | Test | Verifies |
+|---|------|----------|
+| 9 | `Openai_uses_per_call_baseurl_override` | a per‑call `baseUrl` overrides `OPENAI_BASE_URL` |
+| 10 | `Openai_without_override_uses_a_default_base_url` | falls back to the configured default |
+
 ### 4.2 pytest — `tests/test_agent.py` (5, all passing)
 
 | # | Test | Verifies |
@@ -69,7 +76,7 @@ providers and the security/robustness controls.
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 8 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 10 passed
 python -m pytest tests/test_agent.py          # 5 passed
 ```
 
@@ -118,11 +125,11 @@ python -m pytest tests/test_agent.py          # 5 passed
 | NFR‑1 (hardening) | IV‑10 |
 | NFR‑2 (stdout purity, nonce, CRLF) | IV‑1, IV‑6, unit #2/#3 |
 | NFR‑3 (timeouts/robustness) | IV‑11 |
-| NFR‑7 (testability) | §4 (13 automated tests) |
+| NFR‑7 (testability) | §4 (15 automated tests) |
 
 ## 8. Results summary
 
-- **Automated:** 8/8 xUnit + 5/5 pytest passing.
+- **Automated:** 10/10 xUnit + 5/5 pytest passing.
 - **Integration:** IV‑1…IV‑16 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.

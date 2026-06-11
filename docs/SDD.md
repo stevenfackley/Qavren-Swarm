@@ -115,8 +115,8 @@ Owns the container lifecycle.
     `ANTHROPIC_MODEL`, `THINKING_BUDGET`.
   - `claude-code`: `QAVREN_PROVIDER=openai`, `OPENAI_BASE_URL=http://host.docker.internal:<port>/v1`,
     `OPENAI_API_KEY=<broker token>`, `OPENAI_MODEL=<claude alias>`.
-  - `openai`: `QAVREN_PROVIDER=openai`, `OPENAI_BASE_URL`, `OPENAI_API_KEY` (host env or `local`),
-    `OPENAI_MODEL`.
+  - `openai`: `QAVREN_PROVIDER=openai`, `OPENAI_BASE_URL` (per‑call `baseUrl` override, else the
+    `QAVREN_OPENAI_BASE_URL` default), `OPENAI_API_KEY` (host env or `local`), `OPENAI_MODEL`.
 - **`ParseAgentOutput(stdout, nonce)`.** Computes `===QAVREN_DIFF_START:<nonce>===`,
   `…_END:<nonce>===`, `QAVREN_RESULT:<nonce>=`; slices the diff body between the markers stripping
   only the single framing newline (**CR bytes preserved**); parses the trailing result JSON for
@@ -208,7 +208,7 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 
 | Tool | Params | Success result | Error (`isError`) |
 |------|--------|----------------|-------------------|
-| `spawn_sandbox` | `runtime, workspacePath, task, provider?, model?, thinkingBudget?` | `{jobId,status,provider,runtime}` | invalid runtime/provider/path, empty task |
+| `spawn_sandbox` | `runtime, workspacePath, task, provider?, model?, thinkingBudget?, baseUrl?` | `{jobId,status,provider,runtime}` | invalid runtime/provider/path, empty task, non‑http `baseUrl` |
 | `check_sandbox_status` | `jobId` | `{jobId,status,provider,runtime,exitCode?,testsPassed,failedHunks,hasChanges,error}` | unknown jobId |
 | `list_jobs` | — | `{count,jobs[]}` (newest first; `task` truncated to 80) | — |
 | `cancel_job` | `jobId` | `{jobId,cancelling}` or `{jobId,status,note}` | unknown jobId |

@@ -138,7 +138,7 @@ public sealed class DockerLifecycleManager
     // Run one job
     // ------------------------------------------------------------------ #
 
-    public async Task RunAgentAsync(JobStateStore store, JobState job, string? model, int? thinkingBudget, CancellationToken ct)
+    public async Task RunAgentAsync(JobStateStore store, JobState job, string? model, int? thinkingBudget, string? baseUrl, CancellationToken ct)
     {
         string? containerId = null;
         try
@@ -149,7 +149,7 @@ public sealed class DockerLifecycleManager
             var (image, _) = ImageFor(job.Runtime);
             // Per-job nonce: the agent stamps it into the output markers; the model never sees it.
             var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
-            var env = BuildEnv(job, model, thinkingBudget, nonce);
+            var env = BuildEnv(job, model, thinkingBudget, nonce, baseUrl);
 
             var create = await _docker.Containers.CreateContainerAsync(new CreateContainerParameters
             {
@@ -245,7 +245,7 @@ public sealed class DockerLifecycleManager
         }
     }
 
-    private List<string> BuildEnv(JobState job, string? model, int? thinkingBudget, string nonce)
+    internal List<string> BuildEnv(JobState job, string? model, int? thinkingBudget, string nonce, string? baseUrl = null)
     {
         var env = new List<string>
         {
@@ -283,7 +283,7 @@ public sealed class DockerLifecycleManager
             case "openai":
                 var oaKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
                 env.Add("QAVREN_PROVIDER=openai");
-                env.Add($"OPENAI_BASE_URL={_config.DefaultOpenAiBaseUrl}");
+                env.Add($"OPENAI_BASE_URL={baseUrl ?? _config.DefaultOpenAiBaseUrl}"); // per-call override wins
                 env.Add($"OPENAI_API_KEY={(string.IsNullOrEmpty(oaKey) ? "local" : oaKey)}");
                 env.Add($"OPENAI_MODEL={model ?? _config.DefaultOpenAiModel}");
                 break;
