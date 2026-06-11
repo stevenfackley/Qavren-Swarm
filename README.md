@@ -148,14 +148,16 @@ are data, not protocol errors.
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
-| `spawn_sandbox` | `runtime` (`node`\|`python`), `workspacePath` (abs.), `task`, `provider?`, `model?`, `thinkingBudget?` | `{ jobId, status, provider, runtime }` |
+| `spawn_sandbox` | `runtime` (`node`\|`python`), `workspacePath` (abs.), `task`, `provider?`, `model?`, `thinkingBudget?`, `baseUrl?` | `{ jobId, status, provider, runtime }` |
 | `check_sandbox_status` | `jobId` | `{ status, exitCode?, testsPassed, failedHunks, hasChanges, error }` |
 | `list_jobs` | — | `{ count, jobs[] }` (newest first; recovers a dropped `jobId`) |
 | `cancel_job` | `jobId` | `{ cancelling: true }` — stops the container, marks the job `Failed` |
 | `retrieve_diff` | `jobId` | `{ status, testsPassed, failedHunks, diff }` (advisory; host untouched) |
 | `apply_diff` | `jobId` | `{ applied: true, workspacePath }` — the only host‑mutating op |
 
-Statuses: `Pending → Running → Completed | Failed`.
+Statuses: `Pending → Running → Completed | Failed`. `baseUrl` overrides `OPENAI_BASE_URL` for the
+`openai` provider on that one call (e.g. switch between Ollama and LM Studio per task); it is ignored
+for other providers and must be an `http(s)` URL.
 
 ---
 
