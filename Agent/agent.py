@@ -286,6 +286,40 @@ def normalize_rel(raw: str) -> Path:
     return Path(p)
 
 
+def fuzzy_replace(current: str, search: str, replace: str) -> str | None:
+    """Whitespace-tolerant fallback, used only after an exact match fails — the dominant
+    failure mode for weaker local models is the right lines with the wrong leading indentation.
+    Match the SEARCH block against consecutive file lines ignoring each line's leading/trailing
+    whitespace, then splice in REPLACE re-indented to the file's actual indentation. Returns the
+    updated content (LF) or None if no whitespace-insensitive match is found."""
+    cur = current.split("\n")
+    s_lines = search.split("\n")
+    if s_lines and s_lines[-1] == "":
+        s_lines = s_lines[:-1]
+    if not s_lines:
+        return None
+    s_stripped = [ln.strip() for ln in s_lines]
+    n = len(s_lines)
+
+    for i in range(len(cur) - n + 1):
+        if [ln.strip() for ln in cur[i:i + n]] != s_stripped:
+            continue
+        matched_indent = cur[i][:len(cur[i]) - len(cur[i].lstrip())]
+        search_indent = s_lines[0][:len(s_lines[0]) - len(s_lines[0].lstrip())]
+        r_lines = replace.split("\n")
+        if r_lines and r_lines[-1] == "":
+            r_lines = r_lines[:-1]
+        reindented = []
+        for ln in r_lines:
+            if ln.strip() == "":
+                reindented.append("")
+            else:
+                body = ln[len(search_indent):] if search_indent and ln.startswith(search_indent) else ln
+                reindented.append(matched_indent + body)
+        return "\n".join(cur[:i] + reindented + cur[i + n:])
+    return None
+
+
 def apply_edits(model_output: str) -> tuple[int, list[dict]]:
     """Apply every SEARCH/REPLACE block. Returns (applied_count, failed_blocks); each failed
     block is {path, search, replace, reason}. Retryable ones feed a single second pass."""
@@ -319,15 +353,21 @@ def apply_edits(model_output: str) -> tuple[int, list[dict]]:
 
         newline = detect_newline(target)          # preserve CRLF/LF of the existing file
         current = read_text_lf(target)
-        if search not in current:
-            log(f"FAIL {rel}: SEARCH text not found")
-            failed.append({"path": rel, "search": search, "replace": replace, "reason": "search not found"})
-            continue
 
-        updated = current.replace(search, replace, 1)
+        if search in current:
+            updated = current.replace(search, replace, 1)
+            mode = "exact"
+        else:
+            updated = fuzzy_replace(current, search, replace)   # whitespace-tolerant fallback
+            if updated is None:
+                log(f"FAIL {rel}: SEARCH text not found")
+                failed.append({"path": rel, "search": search, "replace": replace, "reason": "search not found"})
+                continue
+            mode = "fuzzy"
+
         write_preserving(target, updated, newline)
         applied += 1
-        log(f"edit {rel} ({'CRLF' if newline == chr(13) + chr(10) else 'LF'})")
+        log(f"edit {rel} ({mode}, {'CRLF' if newline == chr(13) + chr(10) else 'LF'})")
 
     log(f"edits applied={applied} failed={len(failed)}")
     return applied, failed
