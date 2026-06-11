@@ -254,6 +254,12 @@ public sealed class DockerLifecycleManager
             $"QAVREN_NONCE={nonce}",
         };
 
+        // Forward optional agent-side tunables from the host environment when set, so they are
+        // actually configurable end-to-end (agent.py reads them from the container env).
+        foreach (var key in new[] { "QAVREN_CONTEXT_BUDGET", "QAVREN_TEST_TIMEOUT", "QAVREN_MAX_TOKENS" })
+            if (Environment.GetEnvironmentVariable(key) is { Length: > 0 } v)
+                env.Add($"{key}={v}");
+
         switch (job.Provider)
         {
             case "anthropic":
