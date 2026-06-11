@@ -159,6 +159,24 @@ public sealed class SwarmTools
         });
     }
 
+    [McpServerTool(Name = "retrieve_logs")]
+    [Description("Retrieve a job's captured container stderr (the agent's diagnostics) and error " +
+                 "reason — for debugging a Failed run. Empty until the job has started producing output.")]
+    public string RetrieveLogs(
+        [Description("The jobId returned by spawn_sandbox.")] string jobId)
+    {
+        if (!_store.TryGet(jobId, out var job))
+            throw new McpException($"unknown jobId: '{jobId}'");
+
+        return Json(new
+        {
+            jobId,
+            status = job.Status.ToString(),
+            error = job.Error,
+            stderrTail = job.StdErrTail ?? "",
+        });
+    }
+
     [McpServerTool(Name = "apply_diff")]
     [Description("Apply a completed sandbox job's diff to the real host workspace via `git apply`. " +
                  "This is the only operation that mutates host files; call it only after reviewing " +
