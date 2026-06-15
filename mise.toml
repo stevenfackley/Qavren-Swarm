@@ -1,0 +1,11 @@
+[tasks.restore]
+run = "dotnet restore"
+[tasks.build]
+run = "dotnet build --no-restore"
+[tasks.test]
+run = "dotnet test --no-build"
+[tasks.publish]
+run = "dotnet publish --no-build --configuration Release"
+
+[env]
+# non-secret config
