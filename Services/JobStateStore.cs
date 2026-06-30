@@ -40,7 +40,8 @@ public sealed class JobStateStore
         }
     }
 
-    public JobState Create(string runtime, string provider, string workspacePath, string task)
+    public JobState Create(string runtime, string provider, string workspacePath, string task,
+        string? model = null, int? thinkingBudget = null, string? baseUrl = null)
     {
         EvictFinishedIfFull();
         var job = new JobState
@@ -50,6 +51,9 @@ public sealed class JobStateStore
             Provider = provider,
             WorkspacePath = workspacePath,
             Task = task,
+            Model = model,
+            ThinkingBudget = thinkingBudget,
+            BaseUrl = baseUrl,
         };
         _jobs[job.Id] = job;
         Persist(job);
