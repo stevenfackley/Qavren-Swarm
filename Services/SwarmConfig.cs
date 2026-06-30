@@ -19,6 +19,7 @@ public sealed class SwarmConfig
     public string DefaultOpenAiModel { get; }
     public int DefaultThinkingBudget { get; }
     public int JobTimeoutSeconds { get; }
+    public int PauseGraceSeconds { get; }
     public int BrokerTimeoutSeconds { get; }
     public int PidsLimit { get; }
     public long MemoryBytes { get; }
@@ -42,6 +43,7 @@ public sealed class SwarmConfig
         DefaultOpenAiModel = Env("QAVREN_OPENAI_MODEL", "qwen2.5-coder");
         DefaultThinkingBudget = ParseInt("QAVREN_THINKING_BUDGET", 8000);
         JobTimeoutSeconds = ParseInt("QAVREN_JOB_TIMEOUT_SECONDS", 900);     // 15 min wall-clock cap per job
+        PauseGraceSeconds = ParseInt("QAVREN_PAUSE_GRACE_SECONDS", 1800);    // 30 min to resume a hung (Paused) job before it's reaped
         BrokerTimeoutSeconds = ParseInt("QAVREN_BROKER_TIMEOUT_SECONDS", 300); // 5 min cap per `claude -p`
         PidsLimit = ParseInt("QAVREN_PIDS_LIMIT", 512);                      // fork-bomb guard
         MemoryBytes = (long)ParseInt("QAVREN_MEMORY_MB", 2048) * 1024 * 1024; // OOM guard (0 = unlimited)

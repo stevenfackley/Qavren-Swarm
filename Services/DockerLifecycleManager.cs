@@ -210,12 +210,18 @@ public sealed class DockerLifecycleManager
         }
         catch (OperationCanceledException)
         {
-            _log.LogWarning("Job {Id} cancelled or timed out", job.Id);
+            // A user cancel_job is terminal (Failed); a bare wall-clock timeout means the container
+            // hung, so the job is parked in a recoverable Paused state instead of dangling.
+            var (status, error) = JobRecovery.ClassifyInterruption(job.UserCancelled);
+            _log.LogWarning("Job {Id} interrupted → {Status} ({Error})", job.Id, status, error);
             store.Update(job.Id, j =>
             {
-                j.Status = JobStatus.Failed;
-                j.Error = "cancelled or timed out";
-                j.FinishedUtc = DateTimeOffset.UtcNow;
+                j.Status = status;
+                j.Error = error;
+                if (status == JobStatus.Paused)
+                    j.PausedUtc = DateTimeOffset.UtcNow;
+                else
+                    j.FinishedUtc = DateTimeOffset.UtcNow;
             });
         }
         catch (Exception ex)

@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (12, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (29, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -70,6 +70,38 @@ providers and the security/robustness controls.
 | 11 | `Jobs_survive_a_restart_and_inflight_jobs_are_marked_interrupted` | a Completed job + diff reload after restart; an in‑flight job becomes `Failed`/interrupted |
 | 12 | `Persistence_disabled_writes_nothing` | `QAVREN_PERSIST_JOBS=false` writes no files |
 
+`UnifiedDiffSplitter` (`tests/UnifiedDiffSplitterTests.cs`) — pure hunk splitter/recomposer:
+
+| # | Test | Verifies |
+|---|------|----------|
+| 13 | `Parses_files_paths_and_hunk_counts` | a 2‑file diff splits into the right files, paths, and hunk counts |
+| 14 | `Header_excludes_hunks_and_single_hunk_patch_is_header_plus_one_hunk` | file header stops before `@@`; a single‑hunk patch = header + just that hunk |
+| 15 | `Recompose_of_all_hunks_round_trips_the_original_bytes` | selecting every hunk reproduces the input byte‑for‑byte |
+| 16 | `Recompose_of_a_subset_keeps_only_selected_hunks_and_drops_empty_files` | a subset keeps only chosen hunks; files with none are omitted |
+| 17 | `Preserves_CR_bytes_in_hunk_bodies` | CRLF survives split + recompose (sub‑patch still applies to a CRLF file) |
+| 18 | `New_file_path_uses_b_side_deletion_uses_a_side` | path resolution handles `/dev/null` create/delete sides |
+| 19 | `Empty_or_garbage_input_yields_no_files` | non‑diff input → empty list (caller falls back to whole‑patch) |
+
+`apply_diff` recovery (`tests/ApplyDiffTests.cs`) — real‑`git` hunk‑by‑hunk apply:
+
+| # | Test | Verifies |
+|---|------|----------|
+| 20 | `Whole_patch_applies_cleanly_when_workspace_matches` | unchanged fast path: whole patch applies, `partial:false` |
+| 21 | `Rejected_multi_hunk_diff_applies_good_hunks_and_exports_the_rest` | drifted diff → good hunk applied, bad hunk untouched + exported in `rejectedDiff` |
+| 22 | `A_malicious_git_targeting_hunk_is_rejected_not_written_even_in_partial_mode` | **SECURITY:** a `.git/hooks/` hunk is refused by `git apply`, never written, exported instead; legit hunk still lands |
+| 23 | `Strict_mode_applies_nothing_when_the_whole_patch_is_rejected` | `allowPartial:false` keeps the all‑or‑nothing contract (no file touched) |
+
+`JobRecovery` / pause recovery (`tests/PauseRecoveryTests.cs`):
+
+| # | Test | Verifies |
+|---|------|----------|
+| 24 | `User_cancel_classifies_as_failed` | `cancel_job` → terminal `Failed` |
+| 25 | `Bare_timeout_classifies_as_paused` | wall‑clock timeout (hang) → recoverable `Paused` |
+| 26 | `Pause_expiry_respects_the_grace_window_and_only_applies_to_paused_jobs` | `IsPauseExpired` honours the grace window and ignores non‑Paused jobs |
+| 27 | `Resume_creates_a_fresh_job_with_the_same_spawn_params_and_supersedes_the_old_one` | `resume_job` re‑spawns with identical params; old job → `Failed` (superseded) |
+| 28 | `Resume_rejects_a_non_paused_job` | resuming a non‑Paused job is an `McpException` |
+| 29 | `Expired_paused_job_is_reaped_to_failed_when_its_status_is_read` | a stale Paused job is lazily reaped to `Failed` on `check_sandbox_status` |
+
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
 | # | Test | Verifies |
@@ -84,7 +116,7 @@ providers and the security/robustness controls.
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 12 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 29 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -119,6 +151,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 | SEC‑3 | Diff creating a symlink (mode 120000) | passes `--check`, but **unreachable** — the agent only writes regular files, so `git diff` cannot emit a symlink hunk; visible in `retrieve_diff` before apply |
 | SEC‑4 | Forged result envelope (wrong nonce) | ignored by `ParseAgentOutput` (test #3) |
 | SEC‑5 | Out‑of‑tree edit path in agent | rejected by `is_relative_to` (pytest #5) |
+| SEC‑6 | `.git/`‑targeting hunk inside a **partial** `apply_diff` | refused by `git apply`, never written, exported in `rejectedDiff` (xUnit #22) — the hunk‑by‑hunk path keeps `git apply` as the sole writer |
 
 ## 7. Traceability (requirement → evidence)
 

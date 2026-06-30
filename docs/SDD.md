@@ -70,7 +70,8 @@ never an env var). See §11 for the full variable list.
 
 ### 4.3 `Services/JobState.cs` + `JobStateStore.cs`
 
-`JobStatus` enum: `Pending | Running | Completed | Failed`. `JobState` is the mutable per‑job record
+`JobStatus` enum: `Pending | Running | Completed | Failed | Paused` (Paused = a hung container that
+timed out but is kept recoverable; see §4.4 and §9). `JobState` is the mutable per‑job record
 (see §5). `JobStateStore` wraps a `ConcurrentDictionary<string, JobState>` and, when
 `QAVREN_PERSIST_JOBS` is on, mirrors each job to `QAVREN_JOBS_DIR` as one JSON file:
 
@@ -111,8 +112,11 @@ Owns the container lifecycle.
   6. `ParseAgentOutput(stdout, nonce)` extracts the diff + result JSON. Status = `Completed` if exit
      code 0 else `Failed`.
   7. `finally`: `RemoveContainerAsync(force)`.
-  - `OperationCanceledException` → mark `Failed` with "cancelled or timed out". Other exceptions →
-    `Failed` with the exception type/message. The container is removed in either case.
+  - `OperationCanceledException` → `JobRecovery.ClassifyInterruption(job.UserCancelled)`: a
+    `cancel_job` request (sets `UserCancelled`) is terminal **`Failed`** ("cancelled by user"); a bare
+    wall‑clock timeout (no user cancel) means the container **hung** → **`Paused`** with `PausedUtc`
+    set, so it can be re‑spawned by `resume_job` instead of dangling. Other exceptions → `Failed` with
+    the exception type/message. The container is removed in either case.
 - **`BuildEnv`.** Common: `QAVREN_TASK`, `QAVREN_RUNTIME`, `QAVREN_NONCE`. Then forwards
   `QAVREN_CONTEXT_BUDGET`/`QAVREN_TEST_TIMEOUT`/`QAVREN_MAX_TOKENS` from the host env if set. Then,
   by provider:
@@ -148,13 +152,22 @@ Host‑side OpenAI‑compatible shim bridging to `claude -p`.
 
 ### 4.6 `Tools/SwarmTools.cs` (`[McpServerToolType]`)
 
-DI‑injected (`JobStateStore`, `DockerLifecycleManager`, `SwarmConfig`, `ILogger`). Seven tools (§6.1).
+DI‑injected (`JobStateStore`, `DockerLifecycleManager`, `SwarmConfig`, `ILogger`). Eight tools (§6.1).
 Input‑validation failures `throw new McpException(...)` (surfaced as `isError`). `spawn_sandbox`
-creates a job, attaches a `CancellationTokenSource(JobTimeoutSeconds)` to it, and launches
-`RunAgentAsync` on a background `Task` (disposing the CTS in a `finally`). `apply_diff` writes the
-diff verbatim to a temp `.patch` (CR bytes preserved), runs `git apply --check` then `git apply`
-(via `RunGit`, which closes stdin, drains both streams, and enforces a 60s timeout with process‑tree
-kill).
+creates a job (persisting `model`/`thinkingBudget`/`baseUrl` for a later resume) and calls `LaunchRun`,
+which attaches a `CancellationTokenSource(JobTimeoutSeconds)` and launches `RunAgentAsync` on a
+background `Task` (disposing the CTS in a `finally`). `resume_job` re‑uses `LaunchRun` to re‑spawn a
+`Paused` job and marks the old one `Failed` (superseded). A `Paused` job past `PauseGraceSeconds` is
+**lazily reaped** to `Failed` whenever a tool touches it (`ReapIfPauseExpired`, no background timer).
+
+`apply_diff` applies the diff via `git apply` (the **only** host‑file write path) with
+**hunk‑by‑hunk recovery** (`ApplyDiffCore` + the pure `UnifiedDiffSplitter`): it first tries the whole
+patch atomically; if rejected and `allowPartial` (default), it probes each hunk with `git apply
+--check`, applies the passing subset in a single `git apply`, and returns the rejected hunks as a
+unified `rejectedDiff` (data only — never written). `allowPartial=false` restores the strict
+all‑or‑nothing contract. Patches are written verbatim to a temp `.patch` (CR bytes preserved) and run
+via `RunGit`, which closes stdin, drains both streams, and enforces a 60s timeout with process‑tree
+kill.
 
 ### 4.7 `Services/FileLogger.cs`
 
@@ -206,8 +219,17 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | `FailedHunks` | int | unmatched edits after retry |
 | `StdErrTail` | string? | last 4 KB of container stderr |
 | `Error` | string? | failure reason |
-| `CreatedUtc`/`FinishedUtc` | DateTimeOffset(?) | timestamps |
+| `Model`/`ThinkingBudget`/`BaseUrl` | string?/int?/string? | spawn params retained so `resume_job` re‑spawns faithfully |
+| `CreatedUtc`/`FinishedUtc`/`PausedUtc` | DateTimeOffset(?) | timestamps; `PausedUtc` drives the pause grace timeout |
+| `UserCancelled` | bool | not serialized; set by `cancel_job` so a cancel records `Failed` not `Paused` |
 | `Cts` | CancellationTokenSource? | not serialized; drives timeout/cancel |
+
+`JobRecovery` (pure, no IO) holds the recovery decisions: `ClassifyInterruption(userCancelled)` →
+`(Failed,"cancelled by user")` or `(Paused, "container hung…")`, and `IsPauseExpired(job, grace, now)`.
+`UnifiedDiffSplitter` (pure) decomposes a unified diff into per‑file `DiffFile { Path, Header, Hunks }`
+and recomposes any subset of hunks (`Recompose`/`SingleHunkPatch`) — the core of hunk‑by‑hunk apply
+and the rejected‑patch export; it preserves bytes (CRs included) so a reconstructed sub‑patch still
+applies to a CRLF host file.
 
 ## 6. Interfaces & contracts
 
@@ -216,12 +238,13 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | Tool | Params | Success result | Error (`isError`) |
 |------|--------|----------------|-------------------|
 | `spawn_sandbox` | `runtime, workspacePath, task, provider?, model?, thinkingBudget?, baseUrl?` | `{jobId,status,provider,runtime}` | invalid runtime/provider/path, empty task, non‑http `baseUrl` |
-| `check_sandbox_status` | `jobId` | `{jobId,status,provider,runtime,exitCode?,testsPassed,failedHunks,hasChanges,error}` | unknown jobId |
-| `list_jobs` | — | `{count,jobs[]}` (newest first; `task` truncated to 80) | — |
-| `cancel_job` | `jobId` | `{jobId,cancelling}` or `{jobId,status,note}` | unknown jobId |
-| `retrieve_diff` | `jobId` | `{jobId,status,testsPassed,failedHunks,diff}` or running note | unknown jobId |
+| `check_sandbox_status` | `jobId` | `{jobId,status,provider,runtime,exitCode?,testsPassed,failedHunks,hasChanges,resumable,pausedUtc,error}` | unknown jobId |
+| `list_jobs` | — | `{count,jobs[]}` (newest first; `task` truncated to 80; expired pauses reaped on read) | — |
+| `cancel_job` | `jobId` | `{jobId,cancelling}`, or `{jobId,status,note}` (already finished / Paused discarded) | unknown jobId |
+| `resume_job` | `jobId` | `{resumedFrom,jobId,status,provider,runtime}` (re‑spawns a Paused job) | unknown jobId, non‑Paused job |
+| `retrieve_diff` | `jobId` | `{jobId,status,testsPassed,failedHunks,diff}` or running/paused note | unknown jobId |
 | `retrieve_logs` | `jobId` | `{jobId,status,error,stderrTail}` (captured agent diagnostics) | unknown jobId |
-| `apply_diff` | `jobId` | `{jobId,applied,workspacePath}` or `{applied:false,note}` | unknown/non‑Completed jobId, `git apply` failure |
+| `apply_diff` | `jobId, allowPartial?=true` | `{jobId,applied,partial,appliedHunks,failedHunks,workspacePath,rejectedHunks[],rejectedDiff,note}` | unknown/non‑Completed jobId; (strict mode) `git apply` failure |
 
 ### 6.2 Broker HTTP API (OpenAI‑compatible)
 
@@ -288,7 +311,8 @@ host workspace updated.
 
 | Path | Bound | On expiry |
 |------|-------|-----------|
-| Whole job | `QAVREN_JOB_TIMEOUT_SECONDS` (900) | cancel awaits → `Failed`, container force‑removed |
+| Whole job | `QAVREN_JOB_TIMEOUT_SECONDS` (900) | cancel awaits; container force‑removed. User cancel → `Failed`; bare timeout (hang) → `Paused` (recoverable) |
+| Paused job | `QAVREN_PAUSE_GRACE_SECONDS` (1800) | lazily reaped to `Failed` ("paused job expired") on the next tool that touches it |
 | `claude -p` | `QAVREN_BROKER_TIMEOUT_SECONDS` (300) | 502 + process‑tree kill |
 | `git apply` | 60 s | tool error + process‑tree kill |
 | tests | `QAVREN_TEST_TIMEOUT` (300) | inconclusive (`testsPassed=null`) |
@@ -331,6 +355,8 @@ variables, their defaults, and purposes.
 | Lazy image build from embedded tar | Self‑contained binary; no install step; fast startup. |
 | stdout reserved for JSON‑RPC | MCP stdio dies on any non‑protocol stdout; logs go to stderr/file. |
 | Read‑only mount + explicit `apply_diff` | Turns "what did the agent do" into a review problem, not a trust problem. |
+| Hunk‑by‑hunk apply via a pure splitter feeding `git apply` | Recovers partial value from a diff that drifted, without adding a second host‑file writer: every hunk still goes through `git apply` (and its `.git/`/`..` rejection); rejected hunks are exported as data. |
+| Hung container → recoverable `Paused`, not `Failed` | A wall‑clock timeout usually means a wedged container, not a dead job; pausing (with a grace window + `resume_job`) preserves the spawn intent instead of silently discarding it. |
 
 ## 14. Dependencies
 

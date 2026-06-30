@@ -62,6 +62,9 @@ and lock the user into one model/provider and one harness.
 - I can **poll status** and **list jobs** so a dropped `jobId` is recoverable.
 - I can **review the diff** before anything touches my files, and **apply** it only when satisfied.
 - I can **cancel** a runaway job without restarting the server.
+- When a diff only **partly** applies (my workspace moved on), I still get the hunks that fit applied
+  and the rejected ones handed back as a patch I can apply by hand — not an all‑or‑nothing failure.
+- When a container **hangs**, the job is **paused and recoverable** (I can `resume_job` it), not lost.
 - I can **choose the backend** per task to control cost.
 - I can point a job at an **untrusted repo** and trust that build/test scripts run only in a locked‑
   down container.
@@ -70,17 +73,18 @@ and lock the user into one model/provider and one harness.
 
 | ID | Requirement |
 |----|-------------|
-| FR‑1 | Expose MCP tools over stdio: `spawn_sandbox`, `check_sandbox_status`, `list_jobs`, `cancel_job`, `retrieve_diff`, `apply_diff`. |
+| FR‑1 | Expose MCP tools over stdio: `spawn_sandbox`, `check_sandbox_status`, `list_jobs`, `cancel_job`, `resume_job`, `retrieve_diff`, `retrieve_logs`, `apply_diff`. |
 | FR‑2 | `spawn_sandbox` accepts `runtime` (`node`\|`python`), absolute `workspacePath`, `task`, optional `provider`, `model`, `thinkingBudget`; validates input; returns a `jobId` without blocking. |
 | FR‑3 | Mount the host workspace **read‑only**; perform edits on an in‑container copy; never mutate the host except via `apply_diff`. |
 | FR‑4 | Support three providers selectable per spawn: `claude-code` (default), `openai`, `anthropic`. |
 | FR‑5 | For `claude-code`, bridge container model calls to the host `claude -p` CLI via an OpenAI‑compatible broker, without subscription credentials entering the container. |
 | FR‑6 | The agent produces edits via a SEARCH/REPLACE protocol, applies them preserving per‑file line endings, and retries once for unmatched hunks. |
 | FR‑7 | Detect and run a project test suite (`npm test` / `pytest`) when present; report pass/fail without blocking the diff. |
-| FR‑8 | Return the unified `git diff`; `apply_diff` applies it to the host via `git apply` with a pre‑check. |
-| FR‑9 | Track job state (`Pending`/`Running`/`Completed`/`Failed`) and expose it via status/list tools. |
+| FR‑8 | Return the unified `git diff`; `apply_diff` applies it to the host via `git apply` with a pre‑check. When the whole patch is rejected, retry **hunk‑by‑hunk** (default): apply each hunk that still fits and return the rejected hunks as an exportable `rejectedDiff`, without adding any host‑file write path beyond `git apply`. `allowPartial=false` restores the strict all‑or‑nothing apply. |
+| FR‑9 | Track job state (`Pending`/`Running`/`Completed`/`Failed`/`Paused`) and expose it via status/list tools. |
 | FR‑10 | Allow cancellation of a `Pending`/`Running` job, tearing down its container. |
 | FR‑11 | Build the agent container images on demand from build context embedded in the assembly. |
+| FR‑12 | When a container hangs past its wall‑clock cap, transition the job to a recoverable `Paused` state (distinct from a user cancel, which stays `Failed`); `resume_job` re‑spawns it with the original spawn params, and a Paused job is reaped to `Failed` after `QAVREN_PAUSE_GRACE_SECONDS`. |
 
 ## 8. Non‑functional requirements
 
