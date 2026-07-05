@@ -1,2 +1,2 @@
 anthropic>=0.109.2
-openai>=2.43.0
+openai>=2.44.0
