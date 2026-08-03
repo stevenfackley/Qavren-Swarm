@@ -1,7 +1,7 @@
 # Qavren Swarm ephemeral agent — Node 22 runtime.
 # The container is disposable: it copies the mounted (read-only) workspace,
 # lets the model edit the copy, runs tests, and prints a git diff to stdout.
-FROM node:22-alpine
+FROM node:26-alpine
 
 # git for diffing; python3 + pip to run the agent.
 RUN apk add --no-cache git python3 py3-pip
