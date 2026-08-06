@@ -13,7 +13,7 @@
 
   <!-- Kestrel (broker) comes from the Web SDK's implicit Microsoft.AspNetCore.App ref. -->
   <ItemGroup>
-    <PackageReference Include="ModelContextProtocol" Version="2.0.0" />
+    <PackageReference Include="ModelContextProtocol" Version="2.1.0" />
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
   </ItemGroup>
 
