@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **System** | Qavren Swarm |
-| **Stack** | .NET 10 (Web SDK), C# 14, Docker.DotNet, ModelContextProtocol 1.4.0, Python 3.12+ agent |
+| **Stack** | .NET 10 (Web SDK), C# 14, Docker.DotNet, ModelContextProtocol 2.3.0, Python 3.12+ agent |
 | **Status** | Implemented (v1) |
 | **Last updated** | 2026‑06‑11 |
 | **Related** | [PRD](PRD.md) · [STD](STD.md) · [PDD](PDD.md) · [SECURITY](../SECURITY.md) |
@@ -360,7 +360,7 @@ variables, their defaults, and purposes.
 
 ## 14. Dependencies
 
-`ModelContextProtocol` 1.4.0, `Docker.DotNet` 3.125.15, ASP.NET Core (Web SDK), .NET 10 BCL
+`ModelContextProtocol` 2.3.0, `Docker.DotNet` 3.125.15, ASP.NET Core (Web SDK), .NET 10 BCL
 (`System.Formats.Tar`, `System.Text.Json`, `System.Security.Cryptography`). Agent: `anthropic`,
 `openai` Python SDKs, `git`, Node/Python runtimes. Tests: xUnit, `Microsoft.NET.Test.Sdk`, pytest.
 

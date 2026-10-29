@@ -6,8 +6,8 @@ updates:
       - "/"
       - "/tests"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 3
     groups:
       dotnet:
         patterns: ["*"]
@@ -17,28 +17,35 @@ updates:
   - package-ecosystem: "pip"
     directory: "/Agent"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    groups:
+      pip:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # GitHub Actions used by the CI workflow (also keeps runner Node versions current)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    open-pull-requests-limit: 3
     groups:
       actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # ── Added by the project-wide Dependabot sweep ──────────────────────────
   # Ecosystems present in the repo that no existing entry covered.
   - package-ecosystem: "docker"
     directory: "/Agent"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "America/New_York"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    groups:
+      docker:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     labels:
       - "dependencies"
       - "docker"

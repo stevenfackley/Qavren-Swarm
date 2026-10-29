@@ -5,7 +5,7 @@
 | **Product** | Qavren Swarm |
 | **Type** | Local MCP server / developer tool |
 | **Status** | Implemented (v1) |
-| **Owner** | Steven Fackley |
+| **Owner** | Steven Ackley |
 | **Last updated** | 2026‑06‑11 |
 
 ## 1. Overview
@@ -111,7 +111,7 @@ and lock the user into one model/provider and one harness.
 - Spawning against a hostile workspace produces no host mutation prior to `apply_diff`.
 - A job that hangs (dead model endpoint, stalled install) self‑terminates within the configured
   timeout and is cancellable; no orphaned containers remain.
-- The same binary registers and serves all 6 tools under Claude Code and OpenCode.
+- The same binary registers and serves all 8 tools under Claude Code and OpenCode.
 
 ## 11. Out of scope / future
 

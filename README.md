@@ -31,7 +31,7 @@ Default provider is `claude-code`.
 flowchart TB
     subgraph host["Windows host (single process: QavrenSwarm)"]
         IDE["IDE harness<br/>(Claude Code / OpenCode / Cline)"]
-        MCP["MCP stdio server<br/>SwarmTools (7 tools)"]
+        MCP["MCP stdio server<br/>SwarmTools (8 tools)"]
         STORE["JobStateStore<br/>(in-memory, capped)"]
         DLM["DockerLifecycleManager"]
         BROKER["Kestrel broker<br/>POST /v1/chat/completions<br/>(bearer-gated)"]
@@ -96,8 +96,8 @@ container**.
 
 ```powershell
 dotnet build -c Release          # or: dotnet publish -c Release
-dotnet test  tests/QavrenSwarm.Tests.csproj   # 8 xUnit contract tests
-python -m pytest tests/test_agent.py           # 5 agent.py tests
+dotnet test  tests/QavrenSwarm.Tests.csproj   # 29 xUnit tests
+python -m pytest tests/test_agent.py           # 6 agent.py tests
 ```
 
 The two agent images (`qavren-agent-node`, `qavren-agent-python`) are **built by the server on
@@ -241,10 +241,10 @@ Services/
   DockerLifecycleManager.cs Image build (embedded tar), container run, log demux, diff parse
   ClaudeCodeBroker.cs       OpenAI-compatible shim → host `claude -p`
   FileLogger.cs             Append-only file logger (held writer)
-Tools/SwarmTools.cs         The 6 MCP tool handlers
+Tools/SwarmTools.cs         The 8 MCP tool handlers
 Agent/                      Embedded build context for the agent images
-  Dockerfile.node           node:22-alpine, non-root
-  Dockerfile.python         python:3.12-slim, non-root
+  Dockerfile.node           node:26-alpine, non-root
+  Dockerfile.python         python:3.14-slim, non-root
   agent.py                  The in-container coding agent
   requirements.txt          anthropic + openai SDKs (shared by both images)
 tests/                      xUnit contract tests + agent.py pytest
@@ -253,4 +253,4 @@ docs/                       PRD, SDD, STD, PDD
 
 ## License
 
-[MIT](LICENSE) © 2026 Steven Fackley.
+[MIT](LICENSE) © 2026 Steven Ackley.

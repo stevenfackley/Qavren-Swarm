@@ -1,4 +1,4 @@
-# Qavren Swarm ephemeral agent — Python 3.12 runtime.
+# Qavren Swarm ephemeral agent — Python 3.14 runtime.
 # The container is disposable: it copies the mounted (read-only) workspace,
 # lets the model edit the copy, runs tests, and prints a git diff to stdout.
 FROM python:3.14-slim
