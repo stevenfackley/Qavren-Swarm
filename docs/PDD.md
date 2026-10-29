@@ -26,7 +26,7 @@ portable** way to run agentic coding tasks in disposable Docker sandboxes. Objec
 
 | Role | Who | Interest |
 |------|-----|----------|
-| Owner / sole developer / user | Steven Fackley | Builds, runs, and maintains the tool |
+| Owner / sole developer / user | Steven Ackley | Builds, runs, and maintains the tool |
 | IDE harnesses | Claude Code, OpenCode, Cline | MCP clients consuming the tools |
 | Model providers | Claude Code subscription, local OpenAI‑compatible servers, Anthropic API | Backends |
 

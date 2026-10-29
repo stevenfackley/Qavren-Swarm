@@ -32,7 +32,7 @@ providers and the security/robustness controls.
 | Docker | 29.4.1 (Linux engine, Docker Desktop / WSL2) |
 | Git | 2.53.0.windows.3 |
 | Claude CLI | 2.1.153 |
-| Python | 3.12 (container) / host Python for pytest |
+| Python | 3.14 (container) / host Python for pytest |
 
 ## 4. Automated tests
 
@@ -124,7 +124,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 
 | ID | Scenario | Result |
 |----|----------|--------|
-| IV‑1 | MCP handshake over stdio; `tools/list` | 7 tools enumerate; **0 non‑JSON lines on stdout** (logs on stderr) |
+| IV‑1 | MCP handshake over stdio; `tools/list` | 8 tools enumerate; **0 non‑JSON lines on stdout** (logs on stderr) |
 | IV‑2 | Broker `GET /healthz`; unauthenticated `POST /v1/chat/completions` | 200; **401** without bearer |
 | IV‑3 | Server builds `qavren-agent-python:latest` from the embedded tar | image built; no external `docker build` |
 | IV‑4 | Agent run with no task | emits valid nonce envelope + `QAVREN_RESULT`, exit 2 |
@@ -167,11 +167,11 @@ python -m pytest tests/test_agent.py          # 6 passed
 | NFR‑1 (hardening) | IV‑10 |
 | NFR‑2 (stdout purity, nonce, CRLF) | IV‑1, IV‑6, unit #2/#3 |
 | NFR‑3 (timeouts/robustness) | IV‑11 |
-| NFR‑7 (testability) | §4 (18 automated tests) |
+| NFR‑7 (testability) | §4 (35 automated tests) |
 
 ## 8. Results summary
 
-- **Automated:** 12/12 xUnit + 6/6 pytest passing.
+- **Automated:** 29/29 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.
