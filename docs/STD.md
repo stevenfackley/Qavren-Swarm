@@ -32,7 +32,7 @@ providers and the security/robustness controls.
 | Docker | 29.4.1 (Linux engine, Docker Desktop / WSL2) |
 | Git | 2.53.0.windows.3 |
 | Claude CLI | 2.1.153 |
-| Python | 3.14 (container) / host Python for pytest |
+| Python | 3.15 (container) / host Python for pytest |
 
 ## 4. Automated tests
 

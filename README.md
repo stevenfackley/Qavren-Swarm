@@ -244,7 +244,7 @@ Services/
 Tools/SwarmTools.cs         The 8 MCP tool handlers
 Agent/                      Embedded build context for the agent images
   Dockerfile.node           node:26-alpine, non-root
-  Dockerfile.python         python:3.14-slim, non-root
+  Dockerfile.python         python:3.15-slim, non-root
   agent.py                  The in-container coding agent
   requirements.txt          anthropic + openai SDKs (shared by both images)
 tests/                      xUnit contract tests + agent.py pytest
