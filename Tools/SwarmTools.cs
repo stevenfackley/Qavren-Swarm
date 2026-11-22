@@ -86,17 +86,14 @@ public sealed class SwarmTools
     }
 
     /// <summary>Lazily reap a Paused job that has sat past its grace window: no background timer,
-    /// the check runs whenever a tool touches the job.</summary>
+    /// the check runs whenever a tool touches the job. A resume or discard that claimed the job
+    /// first wins; the reap then does nothing.</summary>
     private void ReapIfPauseExpired(JobState job)
     {
         if (!JobRecovery.IsPauseExpired(job, _config.PauseGraceSeconds, DateTimeOffset.UtcNow))
             return;
-        _store.Update(job.Id, j =>
-        {
-            j.Status = JobStatus.Failed;
-            j.Error = "paused job expired (not resumed within grace window)";
-            j.FinishedUtc = DateTimeOffset.UtcNow;
-        });
+        _store.TryTransition(job.Id, [JobStatus.Paused],
+            j => j.Fail("paused job expired (not resumed within grace window)", DateTimeOffset.UtcNow));
     }
 
     [McpServerTool(Name = "check_sandbox_status")]
@@ -114,7 +111,7 @@ public sealed class SwarmTools
             status = job.Status.ToString(),
             provider = job.Provider,
             runtime = job.Runtime,
-            exitCode = job.Status is JobStatus.Completed or JobStatus.Failed ? job.ExitCode : (long?)null,
+            exitCode = job.Status.IsTerminal() ? job.ExitCode : (long?)null,
             testsPassed = job.TestsPassed,
             failedHunks = job.FailedHunks,
             hasChanges = job.Diff.Trim().Length > 0,
@@ -156,17 +153,15 @@ public sealed class SwarmTools
     {
         if (!_store.TryGet(jobId, out var job))
             throw new McpException($"unknown jobId: '{jobId}'");
-        if (job.Status is JobStatus.Completed or JobStatus.Failed)
-            return Json(new { jobId, status = job.Status.ToString(), note = "job already finished" });
+        string AlreadyFinished() => Json(new { jobId, status = job.Status.ToString(), note = "job already finished" });
+        if (job.Status.IsTerminal())
+            return AlreadyFinished();
         if (job.Status == JobStatus.Paused)
         {
-            // The run has already ended (container torn down); just finalize the record.
-            _store.Update(jobId, j =>
-            {
-                j.Status = JobStatus.Failed;
-                j.Error = "paused job discarded";
-                j.FinishedUtc = DateTimeOffset.UtcNow;
-            });
+            // The run has already ended (container torn down); just finalize the record. If a
+            // resume_job or the pause reaper got there first, the job is already finished.
+            if (!_store.TryTransition(jobId, [JobStatus.Paused], j => j.Fail("paused job discarded", DateTimeOffset.UtcNow)))
+                return AlreadyFinished();
             _log.LogInformation("Discarded paused job {Id}", jobId);
             return Json(new { jobId, status = JobStatus.Failed.ToString(), note = "paused job discarded" });
         }
@@ -188,8 +183,6 @@ public sealed class SwarmTools
         if (!_store.TryGet(jobId, out var job))
             throw new McpException($"unknown jobId: '{jobId}'");
         ReapIfPauseExpired(job);
-        if (job.Status != JobStatus.Paused)
-            throw new McpException($"job {jobId} is {job.Status}; only Paused jobs can be resumed");
 
         var fresh = PrepareResume(job);
         LaunchRun(fresh);
@@ -197,19 +190,22 @@ public sealed class SwarmTools
         return Json(new { resumedFrom = jobId, jobId = fresh.Id, status = fresh.Status.ToString(), provider = fresh.Provider, runtime = fresh.Runtime });
     }
 
-    /// <summary>Create the fresh job for a resume and mark the old one superseded — the state
-    /// transition only, no container launch, so it is unit-testable without Docker.</summary>
+    /// <summary>Claim the Paused job, create its replacement and mark the old one superseded — the
+    /// state transition only, no container launch, so it is unit-testable without Docker. The claim
+    /// is taken under the old job's lock before the replacement exists, so two resume_job calls on
+    /// one job cannot both create (and launch) a replacement. Throws when the job is not Paused.</summary>
     internal JobState PrepareResume(JobState paused)
     {
-        var fresh = _store.Create(paused.Runtime, paused.Provider, paused.WorkspacePath, paused.Task,
-            paused.Model, paused.ThinkingBudget, paused.BaseUrl);
-        _store.Update(paused.Id, j =>
+        JobState? fresh = null;
+        var claimed = _store.TryTransition(paused.Id, [JobStatus.Paused], j =>
         {
-            j.Status = JobStatus.Failed;
-            j.Error = $"resumed as {fresh.Id}";
-            j.FinishedUtc = DateTimeOffset.UtcNow;
+            fresh = _store.Create(j.Runtime, j.Provider, j.WorkspacePath, j.Task,
+                j.Model, j.ThinkingBudget, j.BaseUrl);
+            j.Fail($"resumed as {fresh.Id}", DateTimeOffset.UtcNow);
         });
-        return fresh;
+        if (!claimed)
+            throw new McpException($"job {paused.Id} is {paused.Status}; only Paused jobs can be resumed");
+        return fresh!;
     }
 
     [McpServerTool(Name = "retrieve_diff")]

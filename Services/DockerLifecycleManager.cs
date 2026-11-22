@@ -227,12 +227,7 @@ public sealed class DockerLifecycleManager
         catch (Exception ex)
         {
             _log.LogError(ex, "Job {Id} failed", job.Id);
-            store.Update(job.Id, j =>
-            {
-                j.Status = JobStatus.Failed;
-                j.Error = $"{ex.GetType().Name}: {ex.Message}";
-                j.FinishedUtc = DateTimeOffset.UtcNow;
-            });
+            store.Update(job.Id, j => j.Fail($"{ex.GetType().Name}: {ex.Message}", DateTimeOffset.UtcNow));
         }
         finally
         {
