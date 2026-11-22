@@ -81,6 +81,10 @@ timed out but is kept recoverable; see §4.4 and §9). `JobState` is the mutable
   are never evicted.
 - `Update(id, Action<JobState>)` mutates under `lock (job)` and re‑persists, so the background runner's
   multi‑field writes are atomic and the on‑disk copy tracks memory.
+- `TryTransition(id, allowedFrom, Action<JobState>)` is `Update` with a guard: it checks the status
+  under the same `lock (job)` and returns `false` without mutating when the job has already moved on.
+  Every move out of `Paused` (resume, discard, reap) goes through it, so two tool calls racing on one
+  job cannot both act.
 - `All()` returns a snapshot array for `list_jobs`.
 - **On construction**, `LoadFromDisk()` reads every `*.json`; a job still `Pending`/`Running` (its
   container and background task gone with the previous process) is marked `Failed` with
@@ -157,8 +161,10 @@ Input‑validation failures `throw new McpException(...)` (surfaced as `isError`
 creates a job (persisting `model`/`thinkingBudget`/`baseUrl` for a later resume) and calls `LaunchRun`,
 which attaches a `CancellationTokenSource(JobTimeoutSeconds)` and launches `RunAgentAsync` on a
 background `Task` (disposing the CTS in a `finally`). `resume_job` re‑uses `LaunchRun` to re‑spawn a
-`Paused` job and marks the old one `Failed` (superseded). A `Paused` job past `PauseGraceSeconds` is
-**lazily reaped** to `Failed` whenever a tool touches it (`ReapIfPauseExpired`, no background timer).
+`Paused` job and marks the old one `Failed` (superseded); `PrepareResume` claims the old job through
+`TryTransition` before creating the replacement, so only one of two concurrent resumes launches a
+container. A `Paused` job past `PauseGraceSeconds` is **lazily reaped** to `Failed` whenever a tool
+touches it (`ReapIfPauseExpired`, no background timer).
 
 `apply_diff` applies the diff via `git apply` (the **only** host‑file write path) with
 **hunk‑by‑hunk recovery** (`ApplyDiffCore` + the pure `UnifiedDiffSplitter`): it first tries the whole
@@ -225,7 +231,10 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | `Cts` | CancellationTokenSource? | not serialized; drives timeout/cancel |
 
 `JobRecovery` (pure, no IO) holds the recovery decisions: `ClassifyInterruption(userCancelled)` →
-`(Failed,"cancelled by user")` or `(Paused, "container hung…")`, and `IsPauseExpired(job, grace, now)`.
+`(Failed,"cancelled by user")` or `(Paused, "container hung…")`, `IsPauseExpired(job, grace, now)`, and
+the `JobStatus.IsTerminal()` extension (`Completed`/`Failed`; `Paused` is not terminal).
+`JobState.Fail(error, now)` is the one write of the `Failed` state: status, reason and `FinishedUtc`
+together.
 `UnifiedDiffSplitter` (pure) decomposes a unified diff into per‑file `DiffFile { Path, Header, Hunks }`
 and recomposes any subset of hunks (`Recompose`/`SingleHunkPatch`) — the core of hunk‑by‑hunk apply
 and the rejected‑patch export; it preserves bytes (CRs included) so a reconstructed sub‑patch still
@@ -304,7 +313,8 @@ host workspace updated.
 - Per‑job `CancellationTokenSource` (timeout + `cancel_job`) is threaded through every Docker await.
 - Image builds are serialized by a `SemaphoreSlim(1,1)` with double‑checked existence; the build
   cache is a `ConcurrentDictionary`.
-- Job mutations are serialized per‑job via `lock (job)` in `Update`.
+- Job mutations are serialized per‑job via `lock (job)` in `Update`; status‑guarded moves
+  (`TryTransition`) check the status inside that same lock.
 - The broker bounds concurrent `claude -p` processes with `SemaphoreSlim(2,2)`.
 
 ## 9. Error handling & timeouts

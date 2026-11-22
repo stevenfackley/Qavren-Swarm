@@ -235,6 +235,115 @@ public class JobLifecycleTests
         Assert.Null(job.PausedUtc);
     }
 
+    // --- the transition helpers ------------------------------------------ //
+
+    [Theory]
+    [InlineData(JobStatus.Completed, true)]
+    [InlineData(JobStatus.Failed, true)]
+    [InlineData(JobStatus.Pending, false)]
+    [InlineData(JobStatus.Running, false)]
+    [InlineData(JobStatus.Paused, false)]
+    public void IsTerminal_is_true_only_for_completed_and_failed(JobStatus status, bool terminal) =>
+        Assert.Equal(terminal, status.IsTerminal());
+
+    [Fact]
+    public void Fail_sets_status_reason_and_finish_time_together()
+    {
+        var job = new JobState { Id = "j", Runtime = "python", Provider = "openai", WorkspacePath = @"C:\ws", Task = "t" };
+        var now = DateTimeOffset.UtcNow;
+
+        job.Fail("why", now);
+
+        Assert.Equal(JobStatus.Failed, job.Status);
+        Assert.Equal("why", job.Error);
+        Assert.Equal(now, job.FinishedUtc);
+    }
+
+    [Fact]
+    public void TryTransition_mutates_and_persists_when_the_status_is_allowed()
+    {
+        var store = NewStore(persist: true, out var dir);
+        try
+        {
+            var job = Paused(store, DateTimeOffset.UtcNow);
+
+            Assert.True(store.TryTransition(job.Id, [JobStatus.Paused], j => j.Fail("x", DateTimeOffset.UtcNow)));
+
+            Assert.Equal(JobStatus.Failed, job.Status);
+            var reloaded = new JobStateStore(persist: true, dir, NullLogger<JobStateStore>.Instance);
+            Assert.True(reloaded.TryGet(job.Id, out var r));
+            Assert.Equal(JobStatus.Failed, r.Status);
+            Assert.Equal("x", r.Error);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void TryTransition_refuses_and_leaves_the_job_alone_when_the_status_has_moved()
+    {
+        var store = NewStore(persist: false, out _);
+        var job = store.Create("python", "openai", @"C:\ws", "t");
+        store.Update(job.Id, j => { j.Status = JobStatus.Failed; j.Error = "resumed as other"; });
+        var called = false;
+
+        Assert.False(store.TryTransition(job.Id, [JobStatus.Paused], _ => called = true));
+
+        Assert.False(called);
+        Assert.Equal("resumed as other", job.Error);
+    }
+
+    [Fact]
+    public void TryTransition_on_an_unknown_job_returns_false_without_calling_the_mutation()
+    {
+        var store = NewStore(persist: false, out _);
+        var called = false;
+
+        Assert.False(store.TryTransition("missing", [JobStatus.Paused], _ => called = true));
+        Assert.False(called);
+    }
+
+    // --- races the guard closes ------------------------------------------- //
+
+    [Fact]
+    public void Two_resumes_that_both_passed_the_guard_create_only_one_replacement()
+    {
+        // Both resume_job calls read Paused before either claimed the job: the second claim must fail.
+        var (store, tools) = NewTools();
+        var old = Paused(store, DateTimeOffset.UtcNow);
+
+        var fresh = tools.PrepareResume(old);
+        var ex = Assert.Throws<McpException>(() => tools.PrepareResume(old));
+
+        Assert.Equal($"job {old.Id} is Failed; only Paused jobs can be resumed", ex.Message);
+        Assert.Equal($"resumed as {fresh.Id}", old.Error);
+        Assert.Equal(2, store.All().Count);
+    }
+
+    [Fact]
+    public void Concurrent_resumes_of_one_paused_job_create_exactly_one_replacement()
+    {
+        var (store, tools) = NewTools();
+        var old = Paused(store, DateTimeOffset.UtcNow);
+        const int callers = 8;
+        using var start = new Barrier(callers);
+        var winners = 0;
+
+        var threads = Enumerable.Range(0, callers).Select(_ => new Thread(() =>
+        {
+            start.SignalAndWait();
+            try { tools.PrepareResume(old); Interlocked.Increment(ref winners); }
+            catch (McpException) { /* lost the claim */ }
+        })).ToList();
+        threads.ForEach(t => t.Start());
+        threads.ForEach(t => t.Join());
+
+        Assert.Equal(1, winners);
+        Assert.Equal(2, store.All().Count);
+    }
+
     // --- helpers ---------------------------------------------------------- //
 
     private static JobState Paused(JobStateStore store, DateTimeOffset pausedUtc)

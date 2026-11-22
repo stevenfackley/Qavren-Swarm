@@ -96,7 +96,7 @@ container**.
 
 ```powershell
 dotnet build -c Release          # or: dotnet publish -c Release
-dotnet test  tests/QavrenSwarm.Tests.csproj   # 29 xUnit tests
+dotnet test  tests/QavrenSwarm.Tests.csproj   # 57 xUnit tests
 python -m pytest tests/test_agent.py           # 6 agent.py tests
 ```
 

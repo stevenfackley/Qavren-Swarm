@@ -78,12 +78,30 @@ public sealed class JobStateStore
         }
     }
 
+    /// <summary>Like <see cref="Update"/>, but only while the job is still in one of
+    /// <paramref name="allowedFrom"/>. The status is checked under the same per-job lock as the
+    /// mutation, so of two callers racing to move one job only the first acts. Returns false, and
+    /// leaves the job alone, when the id is unknown or the status has already moved on.</summary>
+    public bool TryTransition(string id, IReadOnlyCollection<JobStatus> allowedFrom, Action<JobState> mutate)
+    {
+        if (!_jobs.TryGetValue(id, out var job))
+            return false;
+        lock (job)
+        {
+            if (!allowedFrom.Contains(job.Status))
+                return false;
+            mutate(job);
+            Persist(job);
+            return true;
+        }
+    }
+
     private void EvictFinishedIfFull()
     {
         if (_jobs.Count < MaxJobs)
             return;
         var stale = _jobs.Values
-            .Where(j => j.Status is JobStatus.Completed or JobStatus.Failed)
+            .Where(j => j.Status.IsTerminal())
             .OrderBy(j => j.FinishedUtc ?? j.CreatedUtc)
             .Take(_jobs.Count - MaxJobs + 1)
             .ToList();
@@ -134,9 +152,7 @@ public sealed class JobStateStore
             // task and container are gone. Mark it interrupted so it reads as a clean terminal state.
             if (job.Status is JobStatus.Pending or JobStatus.Running)
             {
-                job.Status = JobStatus.Failed;
-                job.Error = "interrupted by server restart";
-                job.FinishedUtc = now;
+                job.Fail("interrupted by server restart", now);
                 _jobs[job.Id] = job;
                 Persist(job);
             }

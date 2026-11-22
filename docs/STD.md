@@ -4,7 +4,7 @@
 |---|---|
 | **System** | Qavren Swarm |
 | **Status** | v1 verified |
-| **Last updated** | 2026‑06‑11 |
+| **Last updated** | 2026‑11‑21 |
 | **Related** | [PRD](PRD.md) · [SDD](SDD.md) |
 
 ## 1. Scope
@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (29, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (48 tests, 57 cases, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -102,6 +102,30 @@ providers and the security/robustness controls.
 | 28 | `Resume_rejects_a_non_paused_job` | resuming a non‑Paused job is an `McpException` |
 | 29 | `Expired_paused_job_is_reaped_to_failed_when_its_status_is_read` | a stale Paused job is lazily reaped to `Failed` on `check_sandbox_status` |
 
+Job lifecycle transitions (`tests/JobLifecycleTests.cs`); rows marked *theory* run once per status:
+
+| # | Test | Verifies |
+|---|------|----------|
+| 30 | `Cancel_of_a_finished_job_reports_already_finished_and_changes_nothing` | *theory* (Completed, Failed): `cancel_job` on a finished job returns "job already finished" and writes nothing |
+| 31 | `Cancel_of_a_paused_job_discards_it_as_failed_with_a_finish_time` | discarding a Paused job → `Failed`, "paused job discarded", `FinishedUtc` set |
+| 32 | `Cancel_of_a_pending_job_flags_a_user_cancel_and_leaves_the_status_to_the_run` | cancel of a live job only sets `UserCancelled`; the run records the outcome |
+| 33 | `Cancel_after_a_resume_keeps_the_superseded_record` | a cancel after `resume_job` keeps "resumed as <id>" |
+| 34 | `Resume_finishes_the_old_job_and_a_second_resume_of_it_is_refused` | the old job gets `FinishedUtc`; resuming it again is an `McpException` and creates nothing |
+| 35 | `Unexpired_paused_job_stays_resumable_when_its_status_is_read` | a Paused job inside its grace window is not reaped |
+| 36 | `Expired_paused_job_is_reaped_with_a_reason_and_finish_time_by_list_jobs` | `list_jobs` reaps a stale Paused job with the expiry reason and `FinishedUtc` |
+| 37 | `Expired_paused_job_cannot_be_resumed` | `resume_job` on a stale Paused job reaps it and refuses |
+| 38 | `Exit_code_is_reported_only_for_finished_jobs` | *theory* (all five statuses): `exitCode` only for Completed/Failed |
+| 39 | `Eviction_removes_only_finished_jobs_oldest_first` | at the 200‑job cap only Completed/Failed are evicted, oldest first; Paused/Running stay |
+| 40 | `Restart_stamps_a_finish_time_on_interrupted_jobs_and_keeps_paused_jobs_paused` | restart: in‑flight → `Failed` with `FinishedUtc`; Paused reloads Paused |
+| 41 | `Run_that_throws_is_recorded_as_failed_with_the_exception_and_a_finish_time` | a run that throws → `Failed`, "<Type>: <message>", `FinishedUtc` |
+| 42 | `IsTerminal_is_true_only_for_completed_and_failed` | *theory* (all five statuses) |
+| 43 | `Fail_sets_status_reason_and_finish_time_together` | `JobState.Fail` writes all three fields |
+| 44 | `TryTransition_mutates_and_persists_when_the_status_is_allowed` | allowed move mutates and re‑persists |
+| 45 | `TryTransition_refuses_and_leaves_the_job_alone_when_the_status_has_moved` | disallowed move returns `false` and never runs the mutation |
+| 46 | `TryTransition_on_an_unknown_job_returns_false_without_calling_the_mutation` | unknown id → `false` |
+| 47 | `Two_resumes_that_both_passed_the_guard_create_only_one_replacement` | the second of two resumes that both read Paused is refused; one replacement job |
+| 48 | `Concurrent_resumes_of_one_paused_job_create_exactly_one_replacement` | eight threads resume one Paused job; exactly one wins |
+
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
 | # | Test | Verifies |
@@ -116,7 +140,7 @@ providers and the security/robustness controls.
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 29 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 57 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -167,11 +191,11 @@ python -m pytest tests/test_agent.py          # 6 passed
 | NFR‑1 (hardening) | IV‑10 |
 | NFR‑2 (stdout purity, nonce, CRLF) | IV‑1, IV‑6, unit #2/#3 |
 | NFR‑3 (timeouts/robustness) | IV‑11 |
-| NFR‑7 (testability) | §4 (35 automated tests) |
+| NFR‑7 (testability) | §4 (63 automated test cases) |
 
 ## 8. Results summary
 
-- **Automated:** 29/29 xUnit + 6/6 pytest passing.
+- **Automated:** 57/57 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.
