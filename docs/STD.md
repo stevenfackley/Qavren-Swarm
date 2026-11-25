@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (48 tests, 57 cases, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (59 tests, 73 cases, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -126,6 +126,23 @@ Job lifecycle transitions (`tests/JobLifecycleTests.cs`); rows marked *theory* r
 | 47 | `Two_resumes_that_both_passed_the_guard_create_only_one_replacement` | the second of two resumes that both read Paused is refused; one replacement job |
 | 48 | `Concurrent_resumes_of_one_paused_job_create_exactly_one_replacement` | eight threads resume one Paused job; exactly one wins |
 
+`resume_job` launch outcomes (`tests/ResumeLaunchTests.cs`), against a stand‑in Docker engine whose
+steps a test holds open or fails; rows marked *theory* run once per case:
+
+| # | Test | Verifies |
+|---|------|----------|
+| 49 | `Replacement_that_fails_before_its_container_starts_hands_the_old_job_back_as_paused` | *theory* (image lookup, create, start throws): the old job is `Paused` again with its original reason and `PausedUtc`, no `FinishedUtc`, and reads `resumable` |
+| 50 | `Old_job_that_was_handed_back_resumes_once_docker_is_back` | a handed‑back job resumes normally; a further resume of it is refused |
+| 51 | `Concurrent_resumes_of_a_handed_back_job_create_exactly_one_replacement` | eight threads resume a handed‑back job; exactly one wins |
+| 52 | `Hand_back_is_written_to_disk` | the handed‑back job reloads as `Paused` after a restart |
+| 53 | `Cancel_after_the_hand_back_discards_the_old_job_for_good` | a handed‑back job is discarded like any Paused job and cannot be resumed |
+| 54 | `Replacement_that_starts_keeps_the_old_job_superseded` | the old job stays `Failed`, "resumed as <id>", while the replacement runs and after it completes |
+| 55 | `Replacement_that_fails_after_its_container_started_keeps_the_old_job_superseded` | *theory* (non‑zero exit, wait throws): no hand‑back once the container has started |
+| 56 | `Second_resume_while_the_replacement_is_starting_is_refused_and_creates_nothing` | a second `resume_job` during the start‑up window is an `McpException` and creates nothing |
+| 57 | `Cancel_of_the_old_job_while_the_replacement_is_starting_is_final` | *theory* (launch then fails, launch then succeeds): the cancel reads "job already finished" and the old job is not handed back |
+| 58 | `Cancel_of_the_replacement_while_it_is_starting_keeps_the_old_job_superseded` | *theory* (Docker honours the cancel, Docker throws something else): a cancelled replacement is not a failed launch; no hand‑back |
+| 59 | `Timeout_while_the_replacement_is_starting_pauses_the_replacement_and_keeps_the_old_job_superseded` | a start‑up timeout pauses the replacement only, so there is one resumable job, not two |
+
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
 | # | Test | Verifies |
@@ -140,7 +157,7 @@ Job lifecycle transitions (`tests/JobLifecycleTests.cs`); rows marked *theory* r
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 57 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 73 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -191,11 +208,11 @@ python -m pytest tests/test_agent.py          # 6 passed
 | NFR‑1 (hardening) | IV‑10 |
 | NFR‑2 (stdout purity, nonce, CRLF) | IV‑1, IV‑6, unit #2/#3 |
 | NFR‑3 (timeouts/robustness) | IV‑11 |
-| NFR‑7 (testability) | §4 (63 automated test cases) |
+| NFR‑7 (testability) | §4 (79 automated test cases) |
 
 ## 8. Results summary
 
-- **Automated:** 57/57 xUnit + 6/6 pytest passing.
+- **Automated:** 73/73 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.

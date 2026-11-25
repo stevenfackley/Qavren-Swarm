@@ -54,6 +54,12 @@ public sealed class JobState
     [JsonIgnore]
     public CancellationTokenSource? Cts { get; set; }
 
+    /// <summary>The pause that resume_job superseded, kept so that a replacement which never starts
+    /// can hand this job back (<see cref="RestorePause"/>). Null once it has been handed back, or a
+    /// cancel_job has given the hand-back up. Not serialized.</summary>
+    [JsonIgnore]
+    public (string? Error, DateTimeOffset? PausedUtc)? SupersededPause { get; set; }
+
     /// <summary>Move to the terminal <see cref="JobStatus.Failed"/> state. The status, the reason and
     /// the finish time are always written together.</summary>
     public void Fail(string error, DateTimeOffset now)
@@ -62,6 +68,28 @@ public sealed class JobState
         Error = error;
         FinishedUtc = now;
     }
+
+    /// <summary>Mark a Paused job superseded by its resume_job replacement: <see cref="JobStatus.Failed"/>,
+    /// with the pause it leaves remembered in <see cref="SupersededPause"/>.</summary>
+    public void Supersede(string replacementId, DateTimeOffset now)
+    {
+        SupersededPause = (Error, PausedUtc);
+        Fail($"resumed as {replacementId}", now);
+    }
+
+    /// <summary>Undo <see cref="Supersede"/>: <see cref="JobStatus.Paused"/> again, with the reason and
+    /// the expiry it had. Returns false, and changes nothing, when no superseded pause is left.</summary>
+    public bool RestorePause()
+    {
+        if (SupersededPause is not { } pause)
+            return false;
+        Status = JobStatus.Paused;
+        Error = pause.Error;
+        PausedUtc = pause.PausedUtc;
+        FinishedUtc = null;
+        SupersededPause = null;
+        return true;
+    }
 }
 
 /// <summary>Pure decision helpers for hung-container recovery — no IO, fully unit-testable.</summary>
@@ -69,7 +97,8 @@ public static class JobRecovery
 {
     /// <summary>True for <see cref="JobStatus.Completed"/> and <see cref="JobStatus.Failed"/>: the run is
     /// over and nothing moves the job on. <see cref="JobStatus.Paused"/> is not terminal, since a
-    /// Paused job can still be resumed or discarded.</summary>
+    /// Paused job can still be resumed or discarded. The one way back out of Failed is
+    /// <see cref="JobState.RestorePause"/>, for a job whose resume_job replacement never started.</summary>
     public static bool IsTerminal(this JobStatus status) =>
         status is JobStatus.Completed or JobStatus.Failed;
 

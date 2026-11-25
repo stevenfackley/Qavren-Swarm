@@ -138,9 +138,13 @@ public sealed class DockerLifecycleManager
     // Run one job
     // ------------------------------------------------------------------ #
 
-    public async Task RunAgentAsync(JobStateStore store, JobState job, string? model, int? thinkingBudget, string? baseUrl, CancellationToken ct)
+    /// <returns>True when an exception ended the run before its container had started (anything up
+    /// to and including the start call threw), so the agent never ran. False for every other
+    /// outcome, a cancel or a timeout during start-up included.</returns>
+    public async Task<bool> RunAgentAsync(JobStateStore store, JobState job, string? model, int? thinkingBudget, string? baseUrl, CancellationToken ct)
     {
         string? containerId = null;
+        var started = false;
         try
         {
             store.Update(job.Id, j => j.Status = JobStatus.Running);
@@ -184,6 +188,7 @@ public sealed class DockerLifecycleManager
             store.Update(job.Id, j => j.ContainerId = containerId);
 
             await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
+            started = true;
             var wait = await _docker.Containers.WaitContainerAsync(containerId, ct);
 
             using var logs = await _docker.Containers.GetContainerLogsAsync(
@@ -207,6 +212,7 @@ public sealed class DockerLifecycleManager
                     j.Error = $"agent exited {wait.StatusCode}";
             });
             _log.LogInformation("Job {Id} finished exit={Exit} changed={Changed}", job.Id, wait.StatusCode, diff.Trim().Length > 0);
+            return false;
         }
         catch (OperationCanceledException)
         {
@@ -223,11 +229,13 @@ public sealed class DockerLifecycleManager
                 else
                     j.FinishedUtc = DateTimeOffset.UtcNow;
             });
+            return false;
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "Job {Id} failed", job.Id);
             store.Update(job.Id, j => j.Fail($"{ex.GetType().Name}: {ex.Message}", DateTimeOffset.UtcNow));
+            return !started;
         }
         finally
         {
