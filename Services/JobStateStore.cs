@@ -23,16 +23,19 @@ public sealed class JobStateStore
     private readonly bool _persist;
     private readonly string _dir;
     private readonly ILogger<JobStateStore> _log;
+    private readonly Action<string, string> _writeFile;
 
     public JobStateStore(SwarmConfig config, ILogger<JobStateStore> log)
         : this(config.PersistJobs, config.JobsDir, log) { }
 
-    // Test seam: bypass SwarmConfig/env to point at an arbitrary directory.
-    internal JobStateStore(bool persist, string dir, ILogger<JobStateStore> log)
+    // Test seam: bypass SwarmConfig/env to point at an arbitrary directory, and optionally replace the
+    // file write (to make it fail).
+    internal JobStateStore(bool persist, string dir, ILogger<JobStateStore> log, Action<string, string>? writeFile = null)
     {
         _persist = persist;
         _dir = dir;
         _log = log;
+        _writeFile = writeFile ?? File.WriteAllText;
         if (_persist)
         {
             try { Directory.CreateDirectory(_dir); } catch (Exception ex) { _log.LogWarning(ex, "Cannot create jobs dir {Dir}", _dir); }
@@ -132,12 +135,18 @@ public sealed class JobStateStore
     {
         if (!_persist)
             return;
+        // Write a temporary file beside the job file, then move it over: a crash or a failed write
+        // part-way leaves the previous file whole. Written in place, it would leave truncated JSON that
+        // the loader skips, and the job would be gone after a restart.
+        var tmp = Path.Combine(_dir, $"{job.Id}.{Guid.NewGuid():N}.tmp");
         try
         {
-            File.WriteAllText(Path.Combine(_dir, job.Id + ".json"), JsonSerializer.Serialize(job, JsonOpts));
+            _writeFile(tmp, JsonSerializer.Serialize(job, JsonOpts));
+            File.Move(tmp, Path.Combine(_dir, job.Id + ".json"), overwrite: true);
         }
         catch (Exception ex)
         {
+            TryDelete(tmp);
             _log.LogWarning(ex, "Failed to persist job {Id}", job.Id);
         }
     }
@@ -150,10 +159,19 @@ public sealed class JobStateStore
         catch (IOException) { /* best effort */ }
     }
 
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+    }
+
     private void LoadFromDisk()
     {
         if (!Directory.Exists(_dir))
             return;
+        // A temporary file left by a process that died before moving it over its job file.
+        foreach (var tmp in Directory.GetFiles(_dir, "*.tmp"))
+            TryDelete(tmp);
         var now = DateTimeOffset.UtcNow;
         var loaded = 0;
         foreach (var file in Directory.EnumerateFiles(_dir, "*.json"))

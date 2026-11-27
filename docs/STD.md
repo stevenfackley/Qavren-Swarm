@@ -69,6 +69,7 @@ providers and the security/robustness controls.
 |---|------|----------|
 | 11 | `Jobs_survive_a_restart_and_inflight_jobs_are_marked_interrupted` | a Completed job + diff reload after restart; an in‑flight job becomes `Failed`/interrupted |
 | 12 | `Persistence_disabled_writes_nothing` | `QAVREN_PERSIST_JOBS=false` writes no files |
+| 12a | `A_write_that_fails_halfway_leaves_the_previous_job_file_whole` | a job‑file write that fails part‑way (and a temporary left by a killed process) leaves the previous file whole: the job reloads with its last good state and no temporary file remains |
 
 `UnifiedDiffSplitter` (`tests/UnifiedDiffSplitterTests.cs`) — pure hunk splitter/recomposer:
 

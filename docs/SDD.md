@@ -81,6 +81,11 @@ timed out but is kept recoverable; see §4.4 and §9). `JobState` is the mutable
   are never evicted.
 - `Update(id, Action<JobState>)` mutates under `lock (job)` and re‑persists, so the background runner's
   multi‑field writes are atomic and the on‑disk copy tracks memory.
+- `Persist` writes the JSON to a temporary `<id>.<guid>.tmp` beside the job file and moves it over
+  `<id>.json`, so a crash or a failed write part‑way leaves the previous file whole. A failed write
+  is logged and swallowed (the job stays in memory; its file keeps the last good state).
+  `LoadFromDisk` deletes leftover `*.tmp` files. The write is not flushed to disk before the move,
+  so this covers a process crash, not a power cut.
 - `TryTransition(id, allowedFrom, Action<JobState>)` is `Update` with a guard: it checks the status
   under the same `lock (job)` and returns `false` without mutating when the job has already moved on.
   The resume claim goes through it, so two tool calls racing on one job cannot both act. So does
