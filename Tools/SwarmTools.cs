@@ -105,6 +105,16 @@ public sealed class SwarmTools
                 else
                     onSettled?.Invoke();
             }
+            catch (Exception ex)
+            {
+                // The run threw past its own handling (a log write on a full disk, say), maybe before it
+                // recorded an outcome or decided the resume. End the job, and settle the job it superseded
+                // so a cancel of that one stops refusing; after a hand-back settling does nothing.
+                _store.TryTransition(job.Id, [JobStatus.Pending, JobStatus.Running],
+                    j => j.Fail($"run ended unexpectedly ({ex.GetType().Name}: {ex.Message})", _time.GetUtcNow()));
+                onSettled?.Invoke();
+                throw;
+            }
             finally
             {
                 _store.Update(job.Id, j => j.Cts = null);

@@ -166,7 +166,9 @@ DI‑injected (`JobStateStore`, `DockerLifecycleManager`, `SwarmConfig`, `ILogge
 Input‑validation failures `throw new McpException(...)` (surfaced as `isError`). `spawn_sandbox`
 creates a job (persisting `model`/`thinkingBudget`/`baseUrl` for a later resume) and calls `LaunchRun`,
 which attaches a `CancellationTokenSource(JobTimeoutSeconds)` and launches `RunAgentAsync` on a
-background `Task` (disposing the CTS in a `finally`). `resume_job` re‑uses `LaunchRun` to re‑spawn a
+background `Task` (disposing the CTS in a `finally`). If the run throws past its own handling (a log
+write that fails, for example), `LaunchRun` marks a still `Pending`/`Running` job `Failed` ("run
+ended unexpectedly (…)"), settles a superseded job, and rethrows. `resume_job` re‑uses `LaunchRun` to re‑spawn a
 `Paused` job and marks the old one `Failed` (superseded); `PrepareResume` claims the old job through
 `TryTransition` before creating the replacement, so only one of two concurrent resumes launches a
 container. If the replacement fails before its container starts (Docker down; the image build, the

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using Docker.DotNet;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 using QavrenSwarm.Services;
@@ -506,6 +507,28 @@ public class ResumeLaunchTests
     }
 
     [Fact]
+    public async Task Run_that_throws_past_its_own_handling_ends_the_replacement_and_settles_the_old_job()
+    {
+        // The launch fails before the start, and then logging that failure throws (a full disk), so the
+        // exception leaves the run before it recorded an outcome or decided the resume.
+        var (store, tools) = NewTools(new FakeDocker { Create = _ => throw new IOException("docker is down") },
+            dockerLog: new ThrowingLogger());
+        var old = Paused(store);
+        var (fresh, run) = tools.BeginResume(old.Id);
+
+        var ex = await Assert.ThrowsAsync<IOException>(() => Finished(run));
+
+        Assert.Equal("disk full", ex.Message);
+        Assert.Equal(JobStatus.Failed, fresh.Status);
+        Assert.Equal("run ended unexpectedly (IOException: disk full)", fresh.Error);
+        Assert.NotNull(fresh.FinishedUtc);
+        Assert.Null(fresh.Cts);
+        AssertSuperseded(old, fresh);
+        AssertCancelSaysAlreadyFinished(tools, old, fresh);   // not "being resumed" until a restart
+        AssertResumeRefused(tools, old);
+    }
+
+    [Fact]
     public async Task Timeout_while_the_replacement_is_starting_pauses_the_replacement_and_keeps_the_old_job_superseded()
     {
         var starting = new Held();
@@ -568,11 +591,23 @@ public class ResumeLaunchTests
         return job;
     }
 
-    private static (JobStateStore store, SwarmTools tools) NewTools(FakeDocker docker, JobStateStore? store = null, FakeClock? clock = null)
+    private static (JobStateStore store, SwarmTools tools) NewTools(FakeDocker docker, JobStateStore? store = null, FakeClock? clock = null,
+        ILogger<DockerLifecycleManager>? dockerLog = null)
     {
         store ??= new JobStateStore(persist: false, dir: "", NullLogger<JobStateStore>.Instance);
-        var manager = new DockerLifecycleManager(docker.Client, new SwarmConfig(), NullLogger<DockerLifecycleManager>.Instance);
+        var manager = new DockerLifecycleManager(docker.Client, new SwarmConfig(), dockerLog ?? NullLogger<DockerLifecycleManager>.Instance);
         return (store, new SwarmTools(store, manager, new SwarmConfig(), NullLogger<SwarmTools>.Instance, clock ?? new FakeClock()));
+    }
+
+    /// <summary>A logger whose every write fails, as a file logger does on a full disk.</summary>
+    private sealed class ThrowingLogger : ILogger<DockerLifecycleManager>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => throw new IOException("disk full");
     }
 
     /// <summary>The tools' clock: it stands at <see cref="PausedAt"/> until a test moves it.</summary>
