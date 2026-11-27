@@ -84,7 +84,7 @@ and lock the user into one model/provider and one harness.
 | FR‑9 | Track job state (`Pending`/`Running`/`Completed`/`Failed`/`Paused`) and expose it via status/list tools. |
 | FR‑10 | Allow cancellation of a `Pending`/`Running` job, tearing down its container. |
 | FR‑11 | Build the agent container images on demand from build context embedded in the assembly. |
-| FR‑12 | When a container hangs past its wall‑clock cap, transition the job to a recoverable `Paused` state (distinct from a user cancel, which stays `Failed`); `resume_job` re‑spawns it with the original spawn params (a re‑spawn that fails before its container starts leaves the original job `Paused` and resumable), and a Paused job is reaped to `Failed` after `QAVREN_PAUSE_GRACE_SECONDS`. |
+| FR‑12 | When a container hangs past its wall‑clock cap, transition the job to a recoverable `Paused` state (distinct from a user cancel, which stays `Failed`); `resume_job` re‑spawns it with the original spawn params (a re‑spawn that fails before its container starts leaves the original job `Paused` and resumable, with the failed relaunch as its reason and its grace window restarted, at most 3 times), and a Paused job is reaped to `Failed` after `QAVREN_PAUSE_GRACE_SECONDS`. |
 
 ## 8. Non‑functional requirements
 

@@ -96,7 +96,7 @@ container**.
 
 ```powershell
 dotnet build -c Release          # or: dotnet publish -c Release
-dotnet test  tests/QavrenSwarm.Tests.csproj   # 73 xUnit tests
+dotnet test  tests/QavrenSwarm.Tests.csproj   # 76 xUnit tests
 python -m pytest tests/test_agent.py           # 6 agent.py tests
 ```
 
@@ -152,7 +152,7 @@ are data, not protocol errors.
 | `check_sandbox_status` | `jobId` | `{ status, exitCode?, testsPassed, failedHunks, hasChanges, resumable, pausedUtc, error }` |
 | `list_jobs` | — | `{ count, jobs[] }` (newest first; recovers a dropped `jobId`) |
 | `cancel_job` | `jobId` | `{ cancelling: true }` — stops the container, marks the job `Failed`; also discards a `Paused` job |
-| `resume_job` | `jobId` | `{ resumedFrom, jobId, status }` — re‑spawns a `Paused` (hung) job with its original params; old job → `Failed`, or back to `Paused` if the new job fails before its container starts |
+| `resume_job` | `jobId` | `{ resumedFrom, jobId, status }` — re‑spawns a `Paused` (hung) job with its original params; old job → `Failed`, or back to `Paused` if the new job fails before its container starts (its `error` then names the failed relaunch, and its grace window starts again, at most 3 times) |
 | `retrieve_diff` | `jobId` | `{ status, testsPassed, failedHunks, diff }` (advisory; host untouched) |
 | `retrieve_logs` | `jobId` | `{ status, error, stderrTail }` — captured agent diagnostics, for debugging a `Failed` run |
 | `apply_diff` | `jobId`, `allowPartial?` (default `true`) | `{ applied, partial, appliedHunks, failedHunks, rejectedHunks[], rejectedDiff, workspacePath }` — the only host‑mutating op |
@@ -186,7 +186,7 @@ Server‑side (read once at startup):
 | `QAVREN_OPENAI_BASE_URL` | `http://host.docker.internal:11434/v1` | OpenAI‑compatible endpoint |
 | `QAVREN_OPENAI_MODEL` | `qwen2.5-coder` | model for the `openai` provider |
 | `QAVREN_JOB_TIMEOUT_SECONDS` | `900` | per‑job wall‑clock cap (a hang then becomes a recoverable `Paused` job) |
-| `QAVREN_PAUSE_GRACE_SECONDS` | `1800` | how long a `Paused` (hung) job stays resumable before it is reaped to `Failed` |
+| `QAVREN_PAUSE_GRACE_SECONDS` | `1800` | how long a `Paused` (hung) job stays resumable before it is reaped to `Failed`; a resume whose new job never starts restarts it (at most 3 times) |
 | `QAVREN_BROKER_TIMEOUT_SECONDS` | `300` | per‑`claude -p` cap |
 | `QAVREN_PIDS_LIMIT` | `512` | container PID cap (fork‑bomb guard) |
 | `QAVREN_MEMORY_MB` | `2048` | container memory cap |

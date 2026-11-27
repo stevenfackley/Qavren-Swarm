@@ -21,13 +21,19 @@ public sealed class SwarmTools
     private readonly DockerLifecycleManager _docker;
     private readonly SwarmConfig _config;
     private readonly ILogger<SwarmTools> _log;
+    private readonly TimeProvider _time;
 
     public SwarmTools(JobStateStore store, DockerLifecycleManager docker, SwarmConfig config, ILogger<SwarmTools> log)
+        : this(store, docker, config, log, TimeProvider.System) { }
+
+    // Test seam: a clock the test moves, for the pause grace window.
+    internal SwarmTools(JobStateStore store, DockerLifecycleManager docker, SwarmConfig config, ILogger<SwarmTools> log, TimeProvider time)
     {
         _store = store;
         _docker = docker;
         _config = config;
         _log = log;
+        _time = time;
     }
 
     [McpServerTool(Name = "spawn_sandbox")]
@@ -98,10 +104,10 @@ public sealed class SwarmTools
     /// first wins; the reap then does nothing.</summary>
     private void ReapIfPauseExpired(JobState job)
     {
-        if (!JobRecovery.IsPauseExpired(job, _config.PauseGraceSeconds, DateTimeOffset.UtcNow))
+        if (!JobRecovery.IsPauseExpired(job, _config.PauseGraceSeconds, _time.GetUtcNow()))
             return;
         _store.TryTransition(job.Id, [JobStatus.Paused],
-            j => j.Fail("paused job expired (not resumed within grace window)", DateTimeOffset.UtcNow));
+            j => j.Fail(JobRecovery.ExpiryReason(j), _time.GetUtcNow()));
     }
 
     [McpServerTool(Name = "check_sandbox_status")]
@@ -174,7 +180,7 @@ public sealed class SwarmTools
         {
             // The run has already ended (container torn down); just finalize the record. If a
             // resume_job or the pause reaper got there first, the job is already finished.
-            if (!_store.TryTransition(jobId, [JobStatus.Paused], j => j.Fail("paused job discarded", DateTimeOffset.UtcNow)))
+            if (!_store.TryTransition(jobId, [JobStatus.Paused], j => j.Fail("paused job discarded", _time.GetUtcNow())))
                 return AlreadyFinished();
             _log.LogInformation("Discarded paused job {Id}", jobId);
             return Json(new { jobId, status = JobStatus.Failed.ToString(), note = "paused job discarded" });
@@ -191,7 +197,8 @@ public sealed class SwarmTools
     [Description("Resume a Paused (hung) job by re-spawning a fresh container with the same runtime, " +
                  "workspace, task, and provider settings. Returns the new jobId; the old job is marked " +
                  "Failed (superseded). If the new job fails before its container starts (for example " +
-                 "Docker is not running), the old job goes back to Paused and can be resumed again. " +
+                 "Docker is not running), the old job goes back to Paused and can be resumed again; its " +
+                 "grace window starts again, at most 3 times. " +
                  "Only Paused jobs can be resumed.")]
     public string ResumeJob(
         [Description("The Paused jobId to resume.")] string jobId)
@@ -216,12 +223,14 @@ public sealed class SwarmTools
     }
 
     /// <summary>The replacement never ran, so the resume took the work nowhere: put the job it
-    /// superseded back to Paused with its original reason and expiry, resumable again. Does nothing
-    /// when a cancel_job has given the hand-back up in the meantime; that job stays finished.</summary>
+    /// superseded back to Paused, resumable again, with the failed relaunch as its reason and its grace
+    /// window restarted (<see cref="JobState.RestorePause"/>). Does nothing when a cancel_job has given
+    /// the hand-back up in the meantime; that job stays finished.</summary>
     private void HandBack(JobState superseded, JobState replacement)
     {
         var restored = false;
-        _store.TryTransition(superseded.Id, [JobStatus.Failed], j => restored = j.RestorePause());
+        var failure = $"resume as {replacement.Id} never started ({replacement.Error})";
+        _store.TryTransition(superseded.Id, [JobStatus.Failed], j => restored = j.RestorePause(failure, _time.GetUtcNow()));
         if (restored)
             _log.LogWarning("Job {New} never started; job {Old} is Paused again and can be resumed", replacement.Id, superseded.Id);
     }
@@ -237,7 +246,7 @@ public sealed class SwarmTools
         {
             fresh = _store.Create(j.Runtime, j.Provider, j.WorkspacePath, j.Task,
                 j.Model, j.ThinkingBudget, j.BaseUrl);
-            j.Supersede(fresh.Id, DateTimeOffset.UtcNow);
+            j.Supersede(fresh.Id, _time.GetUtcNow());
         });
         if (!claimed)
             throw new McpException($"job {paused.Id} is {paused.Status}; only Paused jobs can be resumed");

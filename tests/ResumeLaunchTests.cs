@@ -14,15 +14,15 @@ using ImagesListResponse = Docker.DotNet.Models.ImagesListResponse;
 namespace QavrenSwarm.Tests;
 
 // resume_job when the replacement's launch goes wrong. A replacement that fails before its container
-// has started hands the old job back as Paused, resumable again; one that starts, is cancelled or
-// times out leaves the old job superseded, as it always did. Docker is a stand-in whose steps a test
-// can hold open or fail, and every test awaits the replacement's background run, so no assertion
-// depends on timing.
+// has started hands the old job back as Paused, resumable again with a fresh grace window; one that
+// starts, is cancelled or times out leaves the old job superseded, as it always did. Docker is a
+// stand-in whose steps a test can hold open or fail, the grace window runs on a clock the test moves,
+// and every test awaits the replacement's background run, so no assertion depends on timing.
 public class ResumeLaunchTests
 {
-    // When the old job paused: far in the future, so its grace window cannot have run out whatever
-    // the real clock says.
-    private static readonly DateTimeOffset PausedAt = new(2999, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    // When the old job paused, and where every test's clock starts.
+    private static readonly DateTimeOffset PausedAt = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly TimeSpan Grace = TimeSpan.FromSeconds(new SwarmConfig().PauseGraceSeconds);
     private static readonly string HungReason = JobRecovery.ClassifyInterruption(userCancelled: false).error;
 
     // --- the launch fails before the container runs ------------------------ //
@@ -40,8 +40,10 @@ public class ResumeLaunchTests
             "create" => new FakeDocker { Create = fail },
             _ => new FakeDocker { Start = fail },
         };
-        var (store, tools) = NewTools(docker);
+        var clock = new FakeClock();
+        var (store, tools) = NewTools(docker, clock: clock);
         var old = Paused(store);
+        clock.Advance(TimeSpan.FromMinutes(10));
 
         var (fresh, run) = tools.BeginResume(old.Id);
         await Finished(run);
@@ -49,8 +51,10 @@ public class ResumeLaunchTests
         Assert.Equal(JobStatus.Failed, fresh.Status);
         Assert.Equal("IOException: docker is down", fresh.Error);
         Assert.Equal(JobStatus.Paused, old.Status);
-        Assert.Equal(HungReason, old.Error);
-        Assert.Equal(PausedAt, old.PausedUtc);
+        // The record says what happened, and the grace window starts again at the hand-back.
+        Assert.Equal($"resume as {fresh.Id} never started (IOException: docker is down)", old.Error);
+        Assert.Equal(clock.GetUtcNow(), old.PausedUtc);
+        Assert.Equal(1, old.HandBacks);
         Assert.Null(old.FinishedUtc);
         // A container that was created but never started is still removed.
         Assert.Equal(failingStep == "start" ? 1 : 0, docker.Removed);
@@ -58,7 +62,7 @@ public class ResumeLaunchTests
         using var doc = JsonDocument.Parse(tools.CheckSandboxStatus(old.Id));
         Assert.Equal("Paused", doc.RootElement.GetProperty("status").GetString());
         Assert.True(doc.RootElement.GetProperty("resumable").GetBoolean());
-        Assert.Equal(HungReason, doc.RootElement.GetProperty("error").GetString());
+        Assert.Equal(old.Error, doc.RootElement.GetProperty("error").GetString());
     }
 
     [Fact]
@@ -114,17 +118,21 @@ public class ResumeLaunchTests
         try
         {
             var store = new JobStateStore(persist: true, dir, NullLogger<JobStateStore>.Instance);
-            var (_, tools) = NewTools(new FakeDocker { Create = _ => throw new IOException("docker is down") }, store);
+            var clock = new FakeClock();
+            var (_, tools) = NewTools(new FakeDocker { Create = _ => throw new IOException("docker is down") }, store, clock);
             var old = Paused(store);
+            clock.Advance(TimeSpan.FromMinutes(10));
 
-            var (_, run) = tools.BeginResume(old.Id);
+            var (fresh, run) = tools.BeginResume(old.Id);
             await Finished(run);
 
             var reloaded = new JobStateStore(persist: true, dir, NullLogger<JobStateStore>.Instance);
             Assert.True(reloaded.TryGet(old.Id, out var r));
             Assert.Equal(JobStatus.Paused, r.Status);
-            Assert.Equal(HungReason, r.Error);
-            Assert.Equal(PausedAt, r.PausedUtc);
+            Assert.Equal($"resume as {fresh.Id} never started (IOException: docker is down)", r.Error);
+            Assert.Equal(clock.GetUtcNow(), r.PausedUtc);
+            // The count of hand-backs survives a restart, so a restart does not reset the bound on them.
+            Assert.Equal(1, r.HandBacks);
             Assert.Null(r.FinishedUtc);
             // The remembered pause is bookkeeping for this process only: the job file keeps its shape.
             Assert.DoesNotContain("SupersededPause", File.ReadAllText(Path.Combine(dir, old.Id + ".json")));
@@ -152,6 +160,88 @@ public class ResumeLaunchTests
         Assert.NotNull(old.FinishedUtc);
         AssertResumeRefused(tools, old);
         Assert.Equal(2, store.All().Count);
+    }
+
+    // --- the grace window after a hand-back -------------------------------- //
+
+    [Fact]
+    public async Task Hand_back_just_before_the_deadline_restarts_the_grace_window()
+    {
+        var starting = new Held();
+        var clock = new FakeClock();
+        var (store, tools) = NewTools(new FakeDocker { Create = starting.Step }, clock: clock);
+        var old = Paused(store);
+
+        clock.Advance(Grace - TimeSpan.FromSeconds(1));   // one second before the old deadline
+        var (fresh, run) = tools.BeginResume(old.Id);
+        await Finished(starting.Reached);
+        clock.Advance(TimeSpan.FromSeconds(2));           // the failing launch outlives that deadline
+        starting.Fail(new IOException("docker is down"));
+        await Finished(run);
+        var handedBackAt = clock.GetUtcNow();
+
+        Assert.Equal("Paused", StatusOf(tools, old));     // not reaped at once
+        Assert.Equal(handedBackAt, old.PausedUtc);
+        clock.Advance(Grace);                             // a full window later it is still resumable
+        Assert.Equal("Paused", StatusOf(tools, old));
+        clock.Advance(TimeSpan.FromTicks(1));             // and then it is reaped
+        Assert.Equal("Failed", StatusOf(tools, old));
+        Assert.Equal($"paused job expired: resume as {fresh.Id} never started (IOException: docker is down); " +
+                     "not resumed again within the grace window", old.Error);
+        Assert.Equal(clock.GetUtcNow(), old.FinishedUtc);
+    }
+
+    [Fact]
+    public async Task Repeated_failed_resumes_cannot_keep_a_job_alive_without_bound()
+    {
+        var clock = new FakeClock();
+        var (store, tools) = NewTools(new FakeDocker { Create = _ => throw new IOException("docker is down") }, clock: clock);
+        var old = Paused(store);
+        // However often it is resumed, a job's last chance is at most this many windows after it paused.
+        var latestDeadline = PausedAt + Grace * (JobRecovery.MaxGraceRestarts + 1);
+        var restartedAt = PausedAt;
+        JobState? fresh = null;
+
+        for (var attempt = 1; attempt <= JobRecovery.MaxGraceRestarts + 1; attempt++)
+        {
+            clock.Advance(Grace - TimeSpan.FromSeconds(1));   // each resume just before the deadline
+            (fresh, var run) = tools.BeginResume(old.Id);
+            await Finished(run);
+
+            Assert.Equal("Paused", StatusOf(tools, old));
+            if (attempt <= JobRecovery.MaxGraceRestarts)
+                restartedAt = clock.GetUtcNow();
+            Assert.Equal(restartedAt, old.PausedUtc);
+            Assert.True(old.PausedUtc + Grace <= latestDeadline);
+        }
+
+        // The last hand-back left the window where the last restart put it, and says so.
+        Assert.Equal($"resume as {fresh!.Id} never started (IOException: docker is down); " +
+                     $"grace window not restarted (already restarted {JobRecovery.MaxGraceRestarts} times)", old.Error);
+        clock.Advance(Grace - TimeSpan.FromSeconds(1));
+        Assert.True(clock.GetUtcNow() > restartedAt + Grace);
+        AssertResumeRefused(tools, old);
+        Assert.Equal($"paused job expired: resume as {fresh.Id} never started (IOException: docker is down); " +
+                     $"grace window not restarted (already restarted {JobRecovery.MaxGraceRestarts} times); " +
+                     "not resumed again within the grace window", old.Error);
+    }
+
+    [Fact]
+    public void Paused_job_that_was_never_resumed_is_reaped_one_window_after_it_paused_as_before()
+    {
+        var clock = new FakeClock();
+        var (store, tools) = NewTools(new FakeDocker(), clock: clock);
+        var job = Paused(store);
+
+        clock.Advance(Grace);
+        Assert.Equal("Paused", StatusOf(tools, job));
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.Equal("Failed", StatusOf(tools, job));
+
+        Assert.Equal("paused job expired (not resumed within grace window)", job.Error);
+        Assert.Equal(PausedAt, job.PausedUtc);
+        Assert.Equal(clock.GetUtcNow(), job.FinishedUtc);
+        Assert.Equal(0, job.HandBacks);
     }
 
     // --- the launch succeeds: as before ----------------------------------- //
@@ -308,6 +398,12 @@ public class ResumeLaunchTests
     // A watchdog only: a step that is never reached fails the test instead of hanging the suite.
     private static Task Finished(Task task) => task.WaitAsync(TimeSpan.FromSeconds(30));
 
+    private static string? StatusOf(SwarmTools tools, JobState job)
+    {
+        using var doc = JsonDocument.Parse(tools.CheckSandboxStatus(job.Id));
+        return doc.RootElement.GetProperty("status").GetString();
+    }
+
     private static JobState Paused(JobStateStore store)
     {
         var job = store.Create("python", "openai", @"C:\ws", "t");
@@ -315,11 +411,21 @@ public class ResumeLaunchTests
         return job;
     }
 
-    private static (JobStateStore store, SwarmTools tools) NewTools(FakeDocker docker, JobStateStore? store = null)
+    private static (JobStateStore store, SwarmTools tools) NewTools(FakeDocker docker, JobStateStore? store = null, FakeClock? clock = null)
     {
         store ??= new JobStateStore(persist: false, dir: "", NullLogger<JobStateStore>.Instance);
         var manager = new DockerLifecycleManager(docker.Client, new SwarmConfig(), NullLogger<DockerLifecycleManager>.Instance);
-        return (store, new SwarmTools(store, manager, new SwarmConfig(), NullLogger<SwarmTools>.Instance));
+        return (store, new SwarmTools(store, manager, new SwarmConfig(), NullLogger<SwarmTools>.Instance, clock ?? new FakeClock()));
+    }
+
+    /// <summary>The tools' clock: it stands at <see cref="PausedAt"/> until a test moves it.</summary>
+    private sealed class FakeClock : TimeProvider
+    {
+        private DateTimeOffset _now = PausedAt;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
     }
 
     /// <summary>A container step a test holds open: <see cref="Reached"/> completes when the run gets

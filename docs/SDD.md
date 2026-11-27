@@ -167,8 +167,14 @@ background `Task` (disposing the CTS in a `finally`). `resume_job` re‑uses `La
 `Paused` job and marks the old one `Failed` (superseded); `PrepareResume` claims the old job through
 `TryTransition` before creating the replacement, so only one of two concurrent resumes launches a
 container. If the replacement fails before its container starts (Docker down; the image build, the
-create or the start threw) and nobody cancelled it, `HandBack` puts the old job back to `Paused` with
-its original reason and `PausedUtc`, so it is resumable again inside the same grace window. A
+create or the start threw) and nobody cancelled it, `HandBack` puts the old job back to `Paused`,
+resumable again, with the failed relaunch as its reason ("resume as <id> never started (<error>)") and
+`PausedUtc` set to the hand‑back time, which restarts the grace window: a job handed back just before
+its deadline is not reaped at once. Only the first `JobRecovery.MaxGraceRestarts` (3) hand‑backs
+restart it (`HandBacks` counts them and is persisted); after that the job keeps the window it had and
+its reason says so, so failed resumes cannot keep a job resumable for more than four windows plus the
+launches in between. A handed‑back job that expires is reaped with the relaunch failure in its
+reason (`JobRecovery.ExpiryReason`); a job never handed back is reaped as before. A
 `cancel_job` on the old job while the replacement is starting gives that hand‑back up, so the job
 stays `Failed`; a replacement that started, was cancelled or timed out leaves it `Failed` too. A
 `Paused` job past `PauseGraceSeconds` is **lazily reaped** to `Failed` whenever a tool touches it
@@ -234,17 +240,19 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | `StdErrTail` | string? | last 4 KB of container stderr |
 | `Error` | string? | failure reason |
 | `Model`/`ThinkingBudget`/`BaseUrl` | string?/int?/string? | spawn params retained so `resume_job` re‑spawns faithfully |
-| `CreatedUtc`/`FinishedUtc`/`PausedUtc` | DateTimeOffset(?) | timestamps; `PausedUtc` drives the pause grace timeout |
+| `CreatedUtc`/`FinishedUtc`/`PausedUtc` | DateTimeOffset(?) | timestamps; `PausedUtc` drives the pause grace timeout (a hand‑back sets it again) |
+| `HandBacks` | int | times `resume_job` handed the job back after a failed relaunch; bounds the grace‑window restarts |
 | `UserCancelled` | bool | not serialized; set by `cancel_job` so a cancel records `Failed` not `Paused` |
-| `SupersededPause` | (string?, DateTimeOffset?)? | not serialized; the reason and `PausedUtc` that `resume_job` replaced, kept for the hand‑back |
+| `SupersededPause` | (string, DateTimeOffset?)? | not serialized; the replacement's id and the `PausedUtc` that `resume_job` replaced, kept for the hand‑back |
 | `Cts` | CancellationTokenSource? | not serialized; drives timeout/cancel |
 
 `JobRecovery` (pure, no IO) holds the recovery decisions: `ClassifyInterruption(userCancelled)` →
-`(Failed,"cancelled by user")` or `(Paused, "container hung…")`, `IsPauseExpired(job, grace, now)`, and
-the `JobStatus.IsTerminal()` extension (`Completed`/`Failed`; `Paused` is not terminal).
+`(Failed,"cancelled by user")` or `(Paused, "container hung…")`, `IsPauseExpired(job, grace, now)`,
+`ExpiryReason(job)`, `MaxGraceRestarts`, and the `JobStatus.IsTerminal()` extension
+(`Completed`/`Failed`; `Paused` is not terminal).
 `JobState.Fail(error, now)` is the one write of the `Failed` state: status, reason and `FinishedUtc`
 together. `Supersede(replacementId, now)` is `Fail` for a resumed job that also remembers the pause,
-and `RestorePause()` undoes it: the only move out of `Failed`.
+and `RestorePause(failure, now)` undoes it with a restarted grace window: the only move out of `Failed`.
 `UnifiedDiffSplitter` (pure) decomposes a unified diff into per‑file `DiffFile { Path, Header, Hunks }`
 and recomposes any subset of hunks (`Recompose`/`SingleHunkPatch`) — the core of hunk‑by‑hunk apply
 and the rejected‑patch export; it preserves bytes (CRs included) so a reconstructed sub‑patch still

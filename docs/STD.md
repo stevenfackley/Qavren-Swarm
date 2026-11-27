@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (59 tests, 73 cases, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (62 tests, 76 cases, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -131,10 +131,10 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 
 | # | Test | Verifies |
 |---|------|----------|
-| 49 | `Replacement_that_fails_before_its_container_starts_hands_the_old_job_back_as_paused` | *theory* (image lookup, create, start throws): the old job is `Paused` again with its original reason and `PausedUtc`, no `FinishedUtc`, and reads `resumable` |
+| 49 | `Replacement_that_fails_before_its_container_starts_hands_the_old_job_back_as_paused` | *theory* (image lookup, create, start throws): the old job is `Paused` again with the failed relaunch as its reason and `PausedUtc` at the hand‑back, no `FinishedUtc`, and reads `resumable` |
 | 50 | `Old_job_that_was_handed_back_resumes_once_docker_is_back` | a handed‑back job resumes normally; a further resume of it is refused |
 | 51 | `Concurrent_resumes_of_a_handed_back_job_create_exactly_one_replacement` | eight threads resume a handed‑back job; exactly one wins |
-| 52 | `Hand_back_is_written_to_disk` | the handed‑back job reloads as `Paused` after a restart |
+| 52 | `Hand_back_is_written_to_disk` | the handed‑back job reloads as `Paused` after a restart, with its reason, `PausedUtc` and `HandBacks` |
 | 53 | `Cancel_after_the_hand_back_discards_the_old_job_for_good` | a handed‑back job is discarded like any Paused job and cannot be resumed |
 | 54 | `Replacement_that_starts_keeps_the_old_job_superseded` | the old job stays `Failed`, "resumed as <id>", while the replacement runs and after it completes |
 | 55 | `Replacement_that_fails_after_its_container_started_keeps_the_old_job_superseded` | *theory* (non‑zero exit, wait throws): no hand‑back once the container has started |
@@ -142,6 +142,9 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 | 57 | `Cancel_of_the_old_job_while_the_replacement_is_starting_is_final` | *theory* (launch then fails, launch then succeeds): the cancel reads "job already finished" and the old job is not handed back |
 | 58 | `Cancel_of_the_replacement_while_it_is_starting_keeps_the_old_job_superseded` | *theory* (Docker honours the cancel, Docker throws something else): a cancelled replacement is not a failed launch; no hand‑back |
 | 59 | `Timeout_while_the_replacement_is_starting_pauses_the_replacement_and_keeps_the_old_job_superseded` | a start‑up timeout pauses the replacement only, so there is one resumable job, not two |
+| 60 | `Hand_back_just_before_the_deadline_restarts_the_grace_window` | a launch that fails past the old deadline hands the job back unreaped; it is reaped one full window after the hand‑back, with the failed relaunch in its reason |
+| 61 | `Repeated_failed_resumes_cannot_keep_a_job_alive_without_bound` | only the first 3 hand‑backs restart the window; the next keeps it and says so, and the job is reaped when it runs out |
+| 62 | `Paused_job_that_was_never_resumed_is_reaped_one_window_after_it_paused_as_before` | a job never handed back is reaped exactly one window after it paused, with the old reason |
 
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
@@ -157,7 +160,7 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 73 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 76 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -212,7 +215,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 
 ## 8. Results summary
 
-- **Automated:** 73/73 xUnit + 6/6 pytest passing.
+- **Automated:** 76/76 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.
