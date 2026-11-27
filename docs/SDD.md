@@ -86,7 +86,7 @@ timed out but is kept recoverable; see §4.4 and §9). `JobState` is the mutable
   The resume claim goes through it, so two tool calls racing on one job cannot both act. So does
   the one move back into `Paused`, the hand‑back of a superseded job (§4.6).
 - `UpdateIf(id, Func<JobState,bool>)` runs a decision under the same lock and persists only when it
-  returns `true`. The pause reaper (expiry judged under the lock), `cancel_job` (which includes the
+  returns `true`; it returns `false`, without running the decision, for an unknown id. The pause reaper (expiry judged under the lock), `cancel_job` (which includes the
   discard of a `Paused` job) and `Settle` use it.
 - `All()` returns a snapshot array for `list_jobs`.
 - **On construction**, `LoadFromDisk()` reads every `*.json`; a job still `Pending`/`Running` (its
@@ -182,7 +182,8 @@ handed back is reaped as before. Until the replacement's launch is decided the o
 `ResumeUndecided` set (with the replacement's id in `ResumedAs`); `Settle` clears it as soon as the
 container has started (`RunAgentAsync`'s `onStarted`) or the run ends without a failed launch (a
 cancel or a timeout), and from then on the old job is finished for good. `cancel_job` takes its
-answer from one look under the job's lock (`UpdateIf`): `Paused` is discarded; a job whose
+answer from one look under the job's lock (`UpdateIf`), its only lookup, so a job evicted before
+that look is an unknown job: `Paused` is discarded; a job whose
 replacement's launch is still undecided is refused with an `McpException` that names the
 replacement ("cancel_job <id> stops it"), since a failed launch would bring it back; any other
 finished job reads "job already finished", which nothing can undo, with "; resumed as <id>" added

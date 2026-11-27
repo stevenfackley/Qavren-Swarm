@@ -184,14 +184,13 @@ public sealed class SwarmTools
     public string CancelJob(
         [Description("The jobId to cancel.")] string jobId)
     {
-        if (!_store.TryGet(jobId, out var job))
-            throw new McpException($"unknown jobId: '{jobId}'");
-        // One look under the job's lock decides the answer: resume_job, its hand-back and the pause
-        // reaper all move the job, so an answer pieced together from separate reads can be false.
-        var status = job.Status;
+        // One look under the job's lock decides the answer, and it is the only look: resume_job, its
+        // hand-back and the pause reaper all move the job, so an answer pieced together from separate
+        // reads can be false. A job that is gone by then (evicted) is an unknown job.
+        var status = JobStatus.Pending;
         string? resumingAs = null, resumedAs = null;
         CancellationTokenSource? cts = null;
-        _store.UpdateIf(jobId, j =>
+        var found = _store.UpdateIf(jobId, j =>
         {
             status = j.Status;
             if (j.Status == JobStatus.Paused)
@@ -215,6 +214,8 @@ public sealed class SwarmTools
             cts = j.Cts;
             return true;
         });
+        if (!found)
+            throw new McpException($"unknown jobId: '{jobId}'");
         if (status == JobStatus.Paused)
         {
             _log.LogInformation("Discarded paused job {Id}", jobId);

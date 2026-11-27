@@ -150,6 +150,9 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 | 65 | `Status_reads_during_a_hand_back_never_reap_the_job_whose_window_it_restarts` | 2000 rounds of a launch that fails after the old deadline while a thread polls `check_sandbox_status`: the job always ends `Paused` |
 | 66 | `Cancel_of_the_replacement_before_its_launch_has_a_cancellation_handle_stops_it_before_it_starts` | a cancel between `PrepareResume` and the launch makes no Docker call; the replacement ends "cancelled by user" and the old job is finished for good |
 | 67 | `After_a_restart_a_superseded_job_reads_finished_and_names_its_replacement` (in `JobLifecycleTests.cs`) | `ResumedAs` survives a restart: a cancel of the superseded job reads "job already finished; resumed as <id>" |
+| 68 | `UpdateIf_on_an_unknown_job_returns_false_without_calling_the_decision` (in `JobLifecycleTests.cs`) | unknown id → `false`, decision never run |
+| 69 | `UpdateIf_persists_only_when_the_decision_says_it_changed_the_job` (in `JobLifecycleTests.cs`) | a `false` decision leaves the job file as it was; a `true` one rewrites it |
+| 70 | `Cancel_of_an_evicted_job_is_an_unknown_job` (in `JobLifecycleTests.cs`) | `cancel_job`'s only lookup is the locked one: an evicted id is "unknown jobId", never an answer from a stale read |
 
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 

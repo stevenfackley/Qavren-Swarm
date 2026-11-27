@@ -328,6 +328,51 @@ public class JobLifecycleTests
         Assert.False(called);
     }
 
+    [Fact]
+    public void UpdateIf_on_an_unknown_job_returns_false_without_calling_the_decision()
+    {
+        var store = NewStore(persist: false, out _);
+        var called = false;
+
+        Assert.False(store.UpdateIf("missing", _ => called = true));
+        Assert.False(called);
+    }
+
+    [Fact]
+    public void UpdateIf_persists_only_when_the_decision_says_it_changed_the_job()
+    {
+        var store = NewStore(persist: true, out var dir);
+        try
+        {
+            var job = Paused(store, DateTimeOffset.UtcNow);
+            var file = Path.Combine(dir, job.Id + ".json");
+            var before = File.ReadAllText(file);
+
+            Assert.True(store.UpdateIf(job.Id, j => { j.Error = "not kept"; return false; }));
+            Assert.Equal(before, File.ReadAllText(file));
+            Assert.True(store.UpdateIf(job.Id, j => { j.Error = "kept"; return true; }));
+            Assert.Contains("\"kept\"", File.ReadAllText(file));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Cancel_of_an_evicted_job_is_an_unknown_job()
+    {
+        var (store, tools) = NewTools();
+        var evicted = store.Create("python", "openai", @"C:\ws", "t");
+        store.Update(evicted.Id, j => j.Fail("done", DateTimeOffset.UtcNow - TimeSpan.FromDays(1)));
+        for (var i = 0; i < 200; i++)
+            store.Create("python", "openai", @"C:\ws", $"t{i}");
+        Assert.False(store.TryGet(evicted.Id, out _));
+
+        var ex = Assert.Throws<McpException>(() => tools.CancelJob(evicted.Id));
+        Assert.Equal($"unknown jobId: '{evicted.Id}'", ex.Message);
+    }
+
     // --- races the guard closes ------------------------------------------- //
 
     [Fact]
