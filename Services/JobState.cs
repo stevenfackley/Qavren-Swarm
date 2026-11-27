@@ -41,8 +41,15 @@ public sealed class JobState
 
     public DateTimeOffset CreatedUtc { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? FinishedUtc { get; set; }
-    /// <summary>Set when the job entered <see cref="JobStatus.Paused"/>; drives the pause grace timeout.</summary>
+    /// <summary>Set when the job entered <see cref="JobStatus.Paused"/>; drives the pause grace timeout.
+    /// A hand-back sets it again (<see cref="RestorePause"/>), which restarts the window.</summary>
     public DateTimeOffset? PausedUtc { get; set; }
+    /// <summary>How many times resume_job handed this job back because its replacement never started.
+    /// A record only, and what picks the reap reason (<see cref="JobRecovery.ExpiryReason"/>).</summary>
+    public int HandBacks { get; set; }
+    /// <summary>The replacement resume_job launched for this job, while this job is superseded by it.
+    /// Cleared by a hand-back.</summary>
+    public string? ResumedAs { get; set; }
 
     /// <summary>True once cancel_job asked this run to stop, so a cancellation is recorded as a user
     /// cancel (Failed) rather than mistaken for a hang (Paused). Not serialized.</summary>
@@ -54,11 +61,12 @@ public sealed class JobState
     [JsonIgnore]
     public CancellationTokenSource? Cts { get; set; }
 
-    /// <summary>The pause that resume_job superseded, kept so that a replacement which never starts
-    /// can hand this job back (<see cref="RestorePause"/>). Null once it has been handed back, or a
-    /// cancel_job has given the hand-back up. Not serialized.</summary>
+    /// <summary>True while the launch of <see cref="ResumedAs"/> is undecided, so a replacement that
+    /// never starts can still hand this job back (<see cref="RestorePause"/>). False once the job has
+    /// been handed back, or once the replacement has started or its run ended without a failed launch
+    /// (<see cref="SettleResume"/>); from then on the job is finished for good. Not serialized.</summary>
     [JsonIgnore]
-    public (string? Error, DateTimeOffset? PausedUtc)? SupersededPause { get; set; }
+    public bool ResumeUndecided { get; set; }
 
     /// <summary>Move to the terminal <see cref="JobStatus.Failed"/> state. The status, the reason and
     /// the finish time are always written together.</summary>
@@ -70,25 +78,43 @@ public sealed class JobState
     }
 
     /// <summary>Mark a Paused job superseded by its resume_job replacement: <see cref="JobStatus.Failed"/>,
-    /// with the pause it leaves remembered in <see cref="SupersededPause"/>.</summary>
+    /// with the replacement's launch undecided until <see cref="RestorePause"/> or <see cref="SettleResume"/>.</summary>
     public void Supersede(string replacementId, DateTimeOffset now)
     {
-        SupersededPause = (Error, PausedUtc);
+        ResumedAs = replacementId;
+        ResumeUndecided = true;
         Fail($"resumed as {replacementId}", now);
     }
 
-    /// <summary>Undo <see cref="Supersede"/>: <see cref="JobStatus.Paused"/> again, with the reason and
-    /// the expiry it had. Returns false, and changes nothing, when no superseded pause is left.</summary>
-    public bool RestorePause()
+    /// <summary>Undo <see cref="Supersede"/> after a failed relaunch: <see cref="JobStatus.Paused"/> again,
+    /// with <paramref name="failure"/> as the reason and a grace window that starts again at
+    /// <paramref name="now"/>. Every hand-back restarts it: only an explicit resume_job leads to one, so
+    /// the caller bounds how often. Returns false, and changes nothing, unless
+    /// <paramref name="replacementId"/>'s launch is the one still undecided.</summary>
+    public bool RestorePause(string replacementId, string failure, DateTimeOffset now)
     {
-        if (SupersededPause is not { } pause)
+        if (!ResumeUndecided || ResumedAs != replacementId)
             return false;
-        Status = JobStatus.Paused;
-        Error = pause.Error;
-        PausedUtc = pause.PausedUtc;
+        HandBacks++;
+        // The time and the reason before the status, so a status read that takes no lock does not
+        // pair Paused with the expiry from before the hand-back. The reaper does not rely on this: it
+        // decides under the lock.
+        PausedUtc = now;
+        Error = failure;
         FinishedUtc = null;
-        SupersededPause = null;
+        ResumedAs = null;
+        ResumeUndecided = false;
+        Status = JobStatus.Paused;
         return true;
+    }
+
+    /// <summary><paramref name="replacementId"/>'s launch is decided without a hand-back (its container
+    /// started, or a cancel or a timeout ended it): this job stays superseded for good. Only an
+    /// unserialized field changes, so there is nothing to persist.</summary>
+    public void SettleResume(string replacementId)
+    {
+        if (ResumedAs == replacementId)
+            ResumeUndecided = false;
     }
 }
 
@@ -115,4 +141,11 @@ public static class JobRecovery
         job.Status == JobStatus.Paused
         && job.PausedUtc is { } paused
         && now - paused > TimeSpan.FromSeconds(graceSeconds);
+
+    /// <summary>The reason an expired Paused job is reaped with. A job that was handed back is Paused
+    /// because its last relaunch failed, which its <see cref="JobState.Error"/> says, so that is kept.</summary>
+    public static string ExpiryReason(JobState job) =>
+        job.HandBacks == 0
+            ? "paused job expired (not resumed within grace window)"
+            : $"paused job expired: {job.Error}; not resumed again within the grace window";
 }

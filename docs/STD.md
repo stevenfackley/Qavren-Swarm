@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (59 tests, 73 cases, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (72 tests, 86 cases, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -69,6 +69,7 @@ providers and the security/robustness controls.
 |---|------|----------|
 | 11 | `Jobs_survive_a_restart_and_inflight_jobs_are_marked_interrupted` | a Completed job + diff reload after restart; an in‑flight job becomes `Failed`/interrupted |
 | 12 | `Persistence_disabled_writes_nothing` | `QAVREN_PERSIST_JOBS=false` writes no files |
+| 12a | `A_write_that_fails_halfway_leaves_the_previous_job_file_whole` | a job‑file write that fails part‑way (and a temporary left by a killed process) leaves the previous file whole: the job reloads with its last good state and no temporary file remains |
 
 `UnifiedDiffSplitter` (`tests/UnifiedDiffSplitterTests.cs`) — pure hunk splitter/recomposer:
 
@@ -109,7 +110,7 @@ Job lifecycle transitions (`tests/JobLifecycleTests.cs`); rows marked *theory* r
 | 30 | `Cancel_of_a_finished_job_reports_already_finished_and_changes_nothing` | *theory* (Completed, Failed): `cancel_job` on a finished job returns "job already finished" and writes nothing |
 | 31 | `Cancel_of_a_paused_job_discards_it_as_failed_with_a_finish_time` | discarding a Paused job → `Failed`, "paused job discarded", `FinishedUtc` set |
 | 32 | `Cancel_of_a_pending_job_flags_a_user_cancel_and_leaves_the_status_to_the_run` | cancel of a live job only sets `UserCancelled`; the run records the outcome |
-| 33 | `Cancel_after_a_resume_keeps_the_superseded_record` | a cancel after `resume_job` keeps "resumed as <id>" |
+| 33 | `Cancel_while_the_replacement_has_not_started_is_refused_and_keeps_the_superseded_record` | a cancel between the `resume_job` claim and the replacement's start is an `McpException` naming the replacement, and keeps "resumed as <id>" |
 | 34 | `Resume_finishes_the_old_job_and_a_second_resume_of_it_is_refused` | the old job gets `FinishedUtc`; resuming it again is an `McpException` and creates nothing |
 | 35 | `Unexpired_paused_job_stays_resumable_when_its_status_is_read` | a Paused job inside its grace window is not reaped |
 | 36 | `Expired_paused_job_is_reaped_with_a_reason_and_finish_time_by_list_jobs` | `list_jobs` reaps a stale Paused job with the expiry reason and `FinishedUtc` |
@@ -131,17 +132,32 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 
 | # | Test | Verifies |
 |---|------|----------|
-| 49 | `Replacement_that_fails_before_its_container_starts_hands_the_old_job_back_as_paused` | *theory* (image lookup, create, start throws): the old job is `Paused` again with its original reason and `PausedUtc`, no `FinishedUtc`, and reads `resumable` |
+| 49 | `Replacement_that_fails_before_its_container_starts_hands_the_old_job_back_as_paused` | *theory* (image lookup, create, start throws): the old job is `Paused` again with the failed relaunch as its reason and `PausedUtc` at the hand‑back, no `FinishedUtc`, and reads `resumable` |
 | 50 | `Old_job_that_was_handed_back_resumes_once_docker_is_back` | a handed‑back job resumes normally; a further resume of it is refused |
 | 51 | `Concurrent_resumes_of_a_handed_back_job_create_exactly_one_replacement` | eight threads resume a handed‑back job; exactly one wins |
-| 52 | `Hand_back_is_written_to_disk` | the handed‑back job reloads as `Paused` after a restart |
+| 52 | `Hand_back_is_written_to_disk` | the handed‑back job reloads as `Paused` after a restart, with its reason, `PausedUtc` and `HandBacks` |
 | 53 | `Cancel_after_the_hand_back_discards_the_old_job_for_good` | a handed‑back job is discarded like any Paused job and cannot be resumed |
 | 54 | `Replacement_that_starts_keeps_the_old_job_superseded` | the old job stays `Failed`, "resumed as <id>", while the replacement runs and after it completes |
 | 55 | `Replacement_that_fails_after_its_container_started_keeps_the_old_job_superseded` | *theory* (non‑zero exit, wait throws): no hand‑back once the container has started |
 | 56 | `Second_resume_while_the_replacement_is_starting_is_refused_and_creates_nothing` | a second `resume_job` during the start‑up window is an `McpException` and creates nothing |
-| 57 | `Cancel_of_the_old_job_while_the_replacement_is_starting_is_final` | *theory* (launch then fails, launch then succeeds): the cancel reads "job already finished" and the old job is not handed back |
-| 58 | `Cancel_of_the_replacement_while_it_is_starting_keeps_the_old_job_superseded` | *theory* (Docker honours the cancel, Docker throws something else): a cancelled replacement is not a failed launch; no hand‑back |
-| 59 | `Timeout_while_the_replacement_is_starting_pauses_the_replacement_and_keeps_the_old_job_superseded` | a start‑up timeout pauses the replacement only, so there is one resumable job, not two |
+| 57 | `Cancel_of_the_old_job_while_the_replacement_is_starting_is_told_it_is_being_resumed` | *theory* (launch then fails, launch then succeeds): the cancel is refused and changes nothing; trying again afterwards discards the handed‑back job, or reads "job already finished" once the replacement has run |
+| 58 | `Cancel_of_the_replacement_while_it_is_starting_keeps_the_old_job_superseded` | *theory* (Docker honours the cancel, Docker throws something else): a cancelled replacement is not a failed launch; no hand‑back, and a cancel of the old job then reads "job already finished" |
+| 59 | `Timeout_while_the_replacement_is_starting_pauses_the_replacement_and_keeps_the_old_job_superseded` | a start‑up timeout pauses the replacement only, so there is one resumable job, not two; a cancel of the old job then reads "job already finished" |
+| 60 | `Hand_back_just_before_the_deadline_restarts_the_grace_window` | a launch that fails past the old deadline hands the job back unreaped; it is reaped one full window after the hand‑back, with the failed relaunch in its reason |
+| 61 | `Each_failed_resume_restarts_the_window_and_only_another_resume_extends_it` | five failed resumes each just before the deadline restart the window every time; without another resume the job is reaped one window after the last hand‑back |
+| 62 | `Paused_job_that_was_never_resumed_is_reaped_one_window_after_it_paused_as_before` | a job never handed back is reaped exactly one window after it paused, with the old reason |
+| 63 | `Cancel_of_the_old_job_once_the_replacement_has_started_is_already_finished_for_good` | once the replacement's container has started (and while it still runs) a cancel of the old job reads "job already finished", and it stays finished |
+| 64 | `Cancel_racing_a_resume_is_never_told_finished_and_then_undone` | 300 rounds of `cancel_job` and `resume_job` released together on one Paused job: an acknowledged cancel always ends `Failed` ("paused job discarded"); a refused one names the replacement, and the job comes back `Paused` |
+| 65 | `Status_reads_during_a_hand_back_never_reap_the_job_whose_window_it_restarts` | 2000 rounds of a launch that fails after the old deadline while a thread polls `check_sandbox_status`: the job always ends `Paused` |
+| 66 | `Cancel_of_the_replacement_before_its_launch_has_a_cancellation_handle_stops_it_before_it_starts` | a cancel between `PrepareResume` and the launch makes no Docker call; the replacement ends "cancelled by user" and the old job is finished for good |
+| 67 | `Run_that_throws_past_its_own_handling_ends_the_replacement_and_settles_the_old_job` | a launch that fails before start and whose failure log throws: the replacement ends `Failed` ("run ended unexpectedly"), the old job is finished for good, not "being resumed" |
+| 68 | `After_a_restart_a_superseded_job_reads_finished_and_names_its_replacement` (in `JobLifecycleTests.cs`) | `ResumedAs` survives a restart: a cancel of the superseded job reads "job already finished; resumed as <id>" |
+| 69 | `UpdateIf_on_an_unknown_job_returns_false_without_calling_the_decision` (in `JobLifecycleTests.cs`) | unknown id → `false`, decision never run |
+| 70 | `UpdateIf_persists_only_when_the_decision_says_it_changed_the_job` (in `JobLifecycleTests.cs`) | a `false` decision leaves the job file as it was; a `true` one rewrites it |
+| 71 | `Cancel_of_an_evicted_job_is_an_unknown_job` (in `JobLifecycleTests.cs`) | `cancel_job`'s only lookup is the locked one: an evicted id is "unknown jobId", never an answer from a stale read |
+
+Where a row above says a cancel of the old job reads "job already finished", the note is
+"job already finished; resumed as <id>".
 
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
@@ -157,7 +173,7 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 73 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 86 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -212,7 +228,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 
 ## 8. Results summary
 
-- **Automated:** 73/73 xUnit + 6/6 pytest passing.
+- **Automated:** 86/86 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.

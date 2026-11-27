@@ -62,16 +62,17 @@ public class JobLifecycleTests
     }
 
     [Fact]
-    public void Cancel_after_a_resume_keeps_the_superseded_record()
+    public void Cancel_while_the_replacement_has_not_started_is_refused_and_keeps_the_superseded_record()
     {
         var (store, tools) = NewTools();
         var old = Paused(store, DateTimeOffset.UtcNow);
-        var fresh = tools.PrepareResume(old);
+        var fresh = tools.PrepareResume(old);   // claimed, and the replacement not launched yet
 
-        using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+        var ex = Assert.Throws<McpException>(() => tools.CancelJob(old.Id));
 
-        Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
-        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+        Assert.Equal($"job {old.Id} is being resumed as {fresh.Id}, whose container has not started yet; " +
+                     $"cancel_job {fresh.Id} stops it", ex.Message);
+        Assert.Equal(JobStatus.Failed, old.Status);
         Assert.Equal($"resumed as {fresh.Id}", old.Error);
     }
 
@@ -217,6 +218,28 @@ public class JobLifecycleTests
         }
     }
 
+    [Fact]
+    public void After_a_restart_a_superseded_job_reads_finished_and_names_its_replacement()
+    {
+        var s1 = NewStore(persist: true, out var dir);
+        try
+        {
+            var old = Paused(s1, DateTimeOffset.UtcNow);
+            var fresh = NewTools(s1).tools.PrepareResume(old);
+
+            // The undecided launch died with the process; nothing can hand the old job back now.
+            var (_, tools) = NewTools(new JobStateStore(persist: true, dir, NullLogger<JobStateStore>.Instance));
+            using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+
+            Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal($"job already finished; resumed as {fresh.Id}", doc.RootElement.GetProperty("note").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     // --- a run that throws ------------------------------------------------ //
 
     [Fact]
@@ -305,6 +328,51 @@ public class JobLifecycleTests
         Assert.False(called);
     }
 
+    [Fact]
+    public void UpdateIf_on_an_unknown_job_returns_false_without_calling_the_decision()
+    {
+        var store = NewStore(persist: false, out _);
+        var called = false;
+
+        Assert.False(store.UpdateIf("missing", _ => called = true));
+        Assert.False(called);
+    }
+
+    [Fact]
+    public void UpdateIf_persists_only_when_the_decision_says_it_changed_the_job()
+    {
+        var store = NewStore(persist: true, out var dir);
+        try
+        {
+            var job = Paused(store, DateTimeOffset.UtcNow);
+            var file = Path.Combine(dir, job.Id + ".json");
+            var before = File.ReadAllText(file);
+
+            Assert.True(store.UpdateIf(job.Id, j => { j.Error = "not kept"; return false; }));
+            Assert.Equal(before, File.ReadAllText(file));
+            Assert.True(store.UpdateIf(job.Id, j => { j.Error = "kept"; return true; }));
+            Assert.Contains("\"kept\"", File.ReadAllText(file));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Cancel_of_an_evicted_job_is_an_unknown_job()
+    {
+        var (store, tools) = NewTools();
+        var evicted = store.Create("python", "openai", @"C:\ws", "t");
+        store.Update(evicted.Id, j => j.Fail("done", DateTimeOffset.UtcNow - TimeSpan.FromDays(1)));
+        for (var i = 0; i < 200; i++)
+            store.Create("python", "openai", @"C:\ws", $"t{i}");
+        Assert.False(store.TryGet(evicted.Id, out _));
+
+        var ex = Assert.Throws<McpException>(() => tools.CancelJob(evicted.Id));
+        Assert.Equal($"unknown jobId: '{evicted.Id}'", ex.Message);
+    }
+
     // --- races the guard closes ------------------------------------------- //
 
     [Fact]
@@ -359,9 +427,9 @@ public class JobLifecycleTests
         return new JobStateStore(persist, dir, NullLogger<JobStateStore>.Instance);
     }
 
-    private static (JobStateStore store, SwarmTools tools) NewTools()
+    private static (JobStateStore store, SwarmTools tools) NewTools(JobStateStore? store = null)
     {
-        var store = NewStore(persist: false, out _);
+        store ??= NewStore(persist: false, out _);
         var docker = new DockerLifecycleManager(docker: null!, new SwarmConfig(), NullLogger<DockerLifecycleManager>.Instance);
         var tools = new SwarmTools(store, docker, new SwarmConfig(), NullLogger<SwarmTools>.Instance);
         return (store, tools);
