@@ -95,12 +95,15 @@ public sealed class JobState
             return false;
         HandBacks++;
         var restart = HandBacks <= JobRecovery.MaxGraceRestarts;
-        Status = JobStatus.Paused;
+        // The time and the reason before the status, so a status read that takes no lock does not
+        // pair Paused with the expiry from before the hand-back. The reaper does not rely on this: it
+        // decides under the lock.
+        PausedUtc = restart ? now : pause.PausedUtc;
         Error = restart
             ? failure
             : $"{failure}; grace window not restarted (already restarted {JobRecovery.MaxGraceRestarts} times)";
-        PausedUtc = restart ? now : pause.PausedUtc;
         FinishedUtc = null;
+        Status = JobStatus.Paused;
         SupersededPause = null;
         return true;
     }

@@ -104,15 +104,18 @@ public sealed class SwarmTools
     }
 
     /// <summary>Lazily reap a Paused job that has sat past its grace window: no background timer,
-    /// the check runs whenever a tool touches the job. A resume or discard that claimed the job
-    /// first wins; the reap then does nothing.</summary>
-    private void ReapIfPauseExpired(JobState job)
-    {
-        if (!JobRecovery.IsPauseExpired(job, _config.PauseGraceSeconds, _time.GetUtcNow()))
-            return;
-        _store.TryTransition(job.Id, [JobStatus.Paused],
-            j => j.Fail(JobRecovery.ExpiryReason(j), _time.GetUtcNow()));
-    }
+    /// the check runs whenever a tool touches the job. The expiry is judged under the job's lock, so
+    /// a resume or discard that claimed the job first, or a hand-back that has just restarted its
+    /// window, wins; the reap then does nothing.</summary>
+    private void ReapIfPauseExpired(JobState job) =>
+        _store.UpdateIf(job.Id, j =>
+        {
+            var now = _time.GetUtcNow();
+            if (!JobRecovery.IsPauseExpired(j, _config.PauseGraceSeconds, now))
+                return false;
+            j.Fail(JobRecovery.ExpiryReason(j), now);
+            return true;
+        });
 
     [McpServerTool(Name = "check_sandbox_status")]
     [Description("Check the status of a spawned sandbox job by its jobId.")]

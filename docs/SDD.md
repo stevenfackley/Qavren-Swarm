@@ -83,11 +83,11 @@ timed out but is kept recoverable; see §4.4 and §9). `JobState` is the mutable
   multi‑field writes are atomic and the on‑disk copy tracks memory.
 - `TryTransition(id, allowedFrom, Action<JobState>)` is `Update` with a guard: it checks the status
   under the same `lock (job)` and returns `false` without mutating when the job has already moved on.
-  Every move out of `Paused` (resume, reap) goes through it, so two tool calls racing on one
-  job cannot both act. So does the one move back into `Paused`, the hand‑back of a superseded job
-  (§4.6).
+  The resume claim goes through it, so two tool calls racing on one job cannot both act. So does
+  the one move back into `Paused`, the hand‑back of a superseded job (§4.6).
 - `UpdateIf(id, Func<JobState,bool>)` runs a decision under the same lock and persists only when it
-  returns `true`. `cancel_job` (which includes the discard of a `Paused` job) and `Settle` use it.
+  returns `true`. The pause reaper (expiry judged under the lock), `cancel_job` (which includes the
+  discard of a `Paused` job) and `Settle` use it.
 - `All()` returns a snapshot array for `list_jobs`.
 - **On construction**, `LoadFromDisk()` reads every `*.json`; a job still `Pending`/`Running` (its
   container and background task gone with the previous process) is marked `Failed` with
@@ -186,7 +186,8 @@ replacement's launch is still undecided is refused with an `McpException` that n
 replacement ("try again in a moment, or cancel_job <id>"), since a failed launch would bring it
 back; any other finished job reads "job already finished", which nothing can undo. A
 `Paused` job past `PauseGraceSeconds` is **lazily reaped** to `Failed` whenever a tool touches it
-(`ReapIfPauseExpired`, no background timer).
+(`ReapIfPauseExpired`, no background timer). The expiry is judged under the job's lock, so a read
+that lands during a hand‑back cannot reap the job on the expiry it had before its window restarted.
 
 `apply_diff` applies the diff via `git apply` (the **only** host‑file write path) with
 **hunk‑by‑hunk recovery** (`ApplyDiffCore` + the pure `UnifiedDiffSplitter`): it first tries the whole

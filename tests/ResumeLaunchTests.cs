@@ -192,6 +192,41 @@ public class ResumeLaunchTests
     }
 
     [Fact]
+    public async Task Status_reads_during_a_hand_back_never_reap_the_job_whose_window_it_restarts()
+    {
+        // The launch fails after the old deadline while a thread keeps reading the job's status. A read
+        // that sees the job half written back (Paused, with the old expired PausedUtc) must not reap it.
+        for (var round = 0; round < 2000; round++)
+        {
+            var starting = new Held();
+            var clock = new FakeClock();
+            var (store, tools) = NewTools(new FakeDocker { Create = starting.Step }, clock: clock);
+            var old = Paused(store);
+            clock.Advance(Grace - TimeSpan.FromSeconds(1));
+            var (_, run) = tools.BeginResume(old.Id);
+            await Finished(starting.Reached);
+            clock.Advance(TimeSpan.FromSeconds(2));
+
+            using var polling = new ManualResetEventSlim();
+            var stop = false;
+            var poller = new Thread(() =>
+            {
+                polling.Set();
+                while (!Volatile.Read(ref stop))
+                    tools.CheckSandboxStatus(old.Id);
+            });
+            poller.Start();
+            polling.Wait();
+            starting.Fail(new IOException("docker is down"));
+            await Finished(run);
+            Volatile.Write(ref stop, true);
+            poller.Join();
+
+            Assert.Equal(JobStatus.Paused, old.Status);
+        }
+    }
+
+    [Fact]
     public async Task Repeated_failed_resumes_cannot_keep_a_job_alive_without_bound()
     {
         var clock = new FakeClock();
