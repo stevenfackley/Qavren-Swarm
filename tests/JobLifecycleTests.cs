@@ -62,16 +62,17 @@ public class JobLifecycleTests
     }
 
     [Fact]
-    public void Cancel_after_a_resume_keeps_the_superseded_record()
+    public void Cancel_while_the_replacement_has_not_started_is_refused_and_keeps_the_superseded_record()
     {
         var (store, tools) = NewTools();
         var old = Paused(store, DateTimeOffset.UtcNow);
-        var fresh = tools.PrepareResume(old);
+        var fresh = tools.PrepareResume(old);   // claimed, and the replacement not launched yet
 
-        using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+        var ex = Assert.Throws<McpException>(() => tools.CancelJob(old.Id));
 
-        Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
-        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+        Assert.Equal($"job {old.Id} is being resumed as {fresh.Id} and its container has not started yet; " +
+                     $"try again in a moment, or cancel_job {fresh.Id} to stop the resumed run", ex.Message);
+        Assert.Equal(JobStatus.Failed, old.Status);
         Assert.Equal($"resumed as {fresh.Id}", old.Error);
     }
 

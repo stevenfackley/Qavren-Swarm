@@ -138,10 +138,12 @@ public sealed class DockerLifecycleManager
     // Run one job
     // ------------------------------------------------------------------ #
 
+    /// <param name="onStarted">Called once the container has started, before the run waits on it.</param>
     /// <returns>True when an exception ended the run before its container had started (anything up
     /// to and including the start call threw), so the agent never ran. False for every other
     /// outcome, a cancel or a timeout during start-up included.</returns>
-    public async Task<bool> RunAgentAsync(JobStateStore store, JobState job, string? model, int? thinkingBudget, string? baseUrl, CancellationToken ct)
+    public async Task<bool> RunAgentAsync(JobStateStore store, JobState job, string? model, int? thinkingBudget, string? baseUrl, CancellationToken ct,
+        Action? onStarted = null)
     {
         string? containerId = null;
         var started = false;
@@ -189,6 +191,7 @@ public sealed class DockerLifecycleManager
 
             await _docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
             started = true;
+            onStarted?.Invoke();
             var wait = await _docker.Containers.WaitContainerAsync(containerId, ct);
 
             using var logs = await _docker.Containers.GetContainerLogsAsync(

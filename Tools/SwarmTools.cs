@@ -76,9 +76,10 @@ public sealed class SwarmTools
     /// <summary>Attach a wall-clock CTS (the handle cancel_job pulls) and fire the container run on a
     /// background task. Shared by spawn_sandbox and resume_job; the run records its own outcome.
     /// <paramref name="onNeverStarted"/> runs when the run failed before its container had started,
-    /// unless cancel_job stopped it: a cancelled run is not a failed launch. Returns the background
-    /// task, so a test can await it.</summary>
-    private Task LaunchRun(JobState job, Action? onNeverStarted = null)
+    /// unless cancel_job stopped it: a cancelled run is not a failed launch. <paramref name="onSettled"/>
+    /// runs once the container has started, and again when the run ends any other way than a failed
+    /// launch, so it must be idempotent. Returns the background task, so a test can await it.</summary>
+    private Task LaunchRun(JobState job, Action? onNeverStarted = null, Action? onSettled = null)
     {
         // Wall-clock cap so a hung container/model can't pin the job in Running forever.
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.JobTimeoutSeconds));
@@ -87,9 +88,12 @@ public sealed class SwarmTools
         {
             try
             {
-                var neverStarted = await _docker.RunAgentAsync(_store, job, job.Model, job.ThinkingBudget, job.BaseUrl, cts.Token);
+                var neverStarted = await _docker.RunAgentAsync(_store, job, job.Model, job.ThinkingBudget, job.BaseUrl, cts.Token,
+                    onStarted: onSettled);
                 if (neverStarted && !job.UserCancelled)
                     onNeverStarted?.Invoke();
+                else
+                    onSettled?.Invoke();
             }
             finally
             {
@@ -161,32 +165,48 @@ public sealed class SwarmTools
 
     [McpServerTool(Name = "cancel_job")]
     [Description("Request cancellation of a Pending/Running job (stops + removes the container, marks " +
-                 "it Failed), or discard a Paused (hung) job.")]
+                 "it Failed), or discard a Paused (hung) job. A job that resume_job is re-spawning, whose " +
+                 "new container has not started yet, is refused with an error that names the new job: " +
+                 "try again in a moment, or cancel the new job.")]
     public string CancelJob(
         [Description("The jobId to cancel.")] string jobId)
     {
         if (!_store.TryGet(jobId, out var job))
             throw new McpException($"unknown jobId: '{jobId}'");
-        string AlreadyFinished() => Json(new { jobId, status = job.Status.ToString(), note = "job already finished" });
-        // resume_job hands the job it superseded back to Paused if the replacement never starts. A
-        // cancel is final, so it gives that hand-back up, under the job's lock. If the hand-back got
-        // there first the job is Paused again, and is discarded below.
-        if (job.SupersededPause is not null
-            && _store.TryTransition(jobId, [JobStatus.Failed], j => j.SupersededPause = null))
-            return AlreadyFinished();
-        if (job.Status.IsTerminal())
-            return AlreadyFinished();
-        if (job.Status == JobStatus.Paused)
+        // One look under the job's lock decides the answer: resume_job, its hand-back and the pause
+        // reaper all move the job, so an answer pieced together from separate reads can be false.
+        var status = job.Status;
+        string? resumingAs = null;
+        _store.UpdateIf(jobId, j =>
         {
-            // The run has already ended (container torn down); just finalize the record. If a
-            // resume_job or the pause reaper got there first, the job is already finished.
-            if (!_store.TryTransition(jobId, [JobStatus.Paused], j => j.Fail("paused job discarded", _time.GetUtcNow())))
-                return AlreadyFinished();
+            status = j.Status;
+            if (j.Status == JobStatus.Paused)
+            {
+                // The run has already ended (container torn down); just finalize the record.
+                j.Fail("paused job discarded", _time.GetUtcNow());
+                return true;
+            }
+            if (j.Status.IsTerminal())
+            {
+                // Superseded by a resume_job whose replacement has not started: not finished yet,
+                // since a failed launch hands it back.
+                resumingAs = j.SupersededPause?.ReplacementId;
+                return false;
+            }
+            // Mark user-cancel BEFORE cancelling so the run records Failed (cancel), not Paused (hang).
+            j.UserCancelled = true;
+            return true;
+        });
+        if (status == JobStatus.Paused)
+        {
             _log.LogInformation("Discarded paused job {Id}", jobId);
             return Json(new { jobId, status = JobStatus.Failed.ToString(), note = "paused job discarded" });
         }
-        // Mark user-cancel BEFORE cancelling so the run records Failed (cancel), not Paused (hang).
-        _store.Update(jobId, j => j.UserCancelled = true);
+        if (resumingAs is not null)
+            throw new McpException($"job {jobId} is being resumed as {resumingAs} and its container has not started yet; " +
+                                   $"try again in a moment, or cancel_job {resumingAs} to stop the resumed run");
+        if (status.IsTerminal())
+            return Json(new { jobId, status = status.ToString(), note = "job already finished" });
         try { job.Cts?.Cancel(); }
         catch (ObjectDisposedException) { /* run is already completing */ }
         _log.LogInformation("Cancellation requested for job {Id}", jobId);
@@ -217,23 +237,34 @@ public sealed class SwarmTools
         ReapIfPauseExpired(job);
 
         var fresh = PrepareResume(job);
-        var run = LaunchRun(fresh, onNeverStarted: () => HandBack(job, fresh));
+        var run = LaunchRun(fresh, onNeverStarted: () => HandBack(job, fresh), onSettled: () => Settle(job, fresh));
         _log.LogInformation("Resumed job {Old} as {New}", jobId, fresh.Id);
         return (fresh, run);
     }
 
     /// <summary>The replacement never ran, so the resume took the work nowhere: put the job it
     /// superseded back to Paused, resumable again, with the failed relaunch as its reason and its grace
-    /// window restarted (<see cref="JobState.RestorePause"/>). Does nothing when a cancel_job has given
-    /// the hand-back up in the meantime; that job stays finished.</summary>
+    /// window restarted (<see cref="JobState.RestorePause"/>). Does nothing unless this replacement's
+    /// launch is still the undecided one.</summary>
     private void HandBack(JobState superseded, JobState replacement)
     {
         var restored = false;
         var failure = $"resume as {replacement.Id} never started ({replacement.Error})";
-        _store.TryTransition(superseded.Id, [JobStatus.Failed], j => restored = j.RestorePause(failure, _time.GetUtcNow()));
+        _store.TryTransition(superseded.Id, [JobStatus.Failed],
+            j => restored = j.RestorePause(replacement.Id, failure, _time.GetUtcNow()));
         if (restored)
             _log.LogWarning("Job {New} never started; job {Old} is Paused again and can be resumed", replacement.Id, superseded.Id);
     }
+
+    /// <summary>The replacement's launch is decided without a hand-back: its container started, or a
+    /// cancel or a timeout ended the run. The job it superseded is finished for good from here on, so
+    /// a cancel_job of it can say so.</summary>
+    private void Settle(JobState superseded, JobState replacement) =>
+        _store.UpdateIf(superseded.Id, j =>
+        {
+            j.EndSupersededPause(replacement.Id);
+            return false;
+        });
 
     /// <summary>Claim the Paused job, create its replacement and mark the old one superseded — the
     /// state transition only, no container launch, so it is unit-testable without Docker. The claim

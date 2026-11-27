@@ -313,7 +313,7 @@ public class ResumeLaunchTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Cancel_of_the_old_job_while_the_replacement_is_starting_is_final(bool launchThenFails)
+    public async Task Cancel_of_the_old_job_while_the_replacement_is_starting_is_told_it_is_being_resumed(bool launchThenFails)
     {
         var starting = new Held();
         var (store, tools) = NewTools(new FakeDocker { Create = starting.Step });
@@ -321,10 +321,10 @@ public class ResumeLaunchTests
         var (fresh, run) = tools.BeginResume(old.Id);
         await Finished(starting.Reached);
 
-        using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
-
-        Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
-        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+        // Not "already finished": a failed launch would still bring the job back.
+        var ex = Assert.Throws<McpException>(() => tools.CancelJob(old.Id));
+        Assert.Equal(BeingResumed(old, fresh), ex.Message);
+        AssertSuperseded(old, fresh);   // the refused cancel changed nothing
 
         if (launchThenFails)
             starting.Fail(new IOException("docker is down"));
@@ -332,11 +332,98 @@ public class ResumeLaunchTests
             starting.Release();
         await Finished(run);
 
-        // The cancel was told the job is finished, so the failed launch must not bring it back.
-        Assert.Equal(launchThenFails ? JobStatus.Failed : JobStatus.Completed, fresh.Status);
-        AssertSuperseded(old, fresh);
+        // Trying again gets an answer that stays true.
+        using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+        if (launchThenFails)
+        {
+            Assert.Equal("paused job discarded", doc.RootElement.GetProperty("note").GetString());
+            Assert.Equal(JobStatus.Failed, old.Status);
+            Assert.Equal("paused job discarded", old.Error);
+        }
+        else
+        {
+            Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+            Assert.Equal(JobStatus.Completed, fresh.Status);
+            AssertSuperseded(old, fresh);
+        }
         AssertResumeRefused(tools, old);
         Assert.Equal(2, store.All().Count);
+    }
+
+    [Fact]
+    public async Task Cancel_of_the_old_job_once_the_replacement_has_started_is_already_finished_for_good()
+    {
+        var running = new Held();
+        var (store, tools) = NewTools(new FakeDocker { Wait = async ct => { await running.Step(ct); return 0; } });
+        var old = Paused(store);
+        var (fresh, run) = tools.BeginResume(old.Id);
+        await Finished(running.Reached);   // the container has started; the run waits on it
+
+        using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+
+        Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+        running.Release();
+        await Finished(run);
+        Assert.Equal(JobStatus.Completed, fresh.Status);
+        AssertSuperseded(old, fresh);
+        AssertResumeRefused(tools, old);
+    }
+
+    [Fact]
+    public async Task Cancel_racing_a_resume_is_never_told_finished_and_then_undone()
+    {
+        // Each launch is held until both calls have answered, then fails and hands the job back.
+        // Whichever call gets the job first, an acknowledged cancel must hold, and a refused one must
+        // be true.
+        for (var round = 0; round < 300; round++)
+        {
+            var starting = new Held();
+            var (store, tools) = NewTools(new FakeDocker { Create = starting.Step });
+            var old = Paused(store);
+            using var start = new Barrier(2);
+            Task? run = null;
+            string? note = null;
+            McpException? refused = null;
+            var resumer = new Thread(() =>
+            {
+                start.SignalAndWait();
+                try { run = tools.BeginResume(old.Id).run; }
+                catch (McpException) { /* the cancel discarded it first */ }
+            });
+            var canceller = new Thread(() =>
+            {
+                start.SignalAndWait();
+                try
+                {
+                    using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+                    note = doc.RootElement.GetProperty("note").GetString();
+                }
+                catch (McpException ex) { refused = ex; }
+            });
+            resumer.Start();
+            canceller.Start();
+            resumer.Join();
+            canceller.Join();
+            if (run is not null)
+            {
+                await Finished(starting.Reached);
+                starting.Fail(new IOException("docker is down"));
+                await Finished(run);
+            }
+
+            if (refused is null)
+            {
+                Assert.Equal("paused job discarded", note);
+                Assert.Equal(JobStatus.Failed, old.Status);
+                Assert.Equal("paused job discarded", old.Error);
+            }
+            else
+            {
+                Assert.StartsWith($"job {old.Id} is being resumed as ", refused.Message);
+                Assert.Equal(JobStatus.Paused, old.Status);   // the launch failed and handed it back
+            }
+        }
     }
 
     [Theory]
@@ -360,6 +447,7 @@ public class ResumeLaunchTests
         Assert.Equal(JobStatus.Failed, fresh.Status);
         Assert.Equal(error, fresh.Error);
         AssertSuperseded(old, fresh);
+        AssertCancelSaysAlreadyFinished(tools, old);
     }
 
     [Fact]
@@ -378,6 +466,7 @@ public class ResumeLaunchTests
         Assert.Equal(HungReason, fresh.Error);
         AssertSuperseded(old, fresh);
         Assert.Single(store.All(), j => j.Status == JobStatus.Paused);   // one resumable job, not two
+        AssertCancelSaysAlreadyFinished(tools, old);
     }
 
     // --- helpers ---------------------------------------------------------- //
@@ -394,6 +483,17 @@ public class ResumeLaunchTests
         var ex = Assert.Throws<McpException>(() => tools.ResumeJob(job.Id));
         Assert.Equal($"job {job.Id} is Failed; only Paused jobs can be resumed", ex.Message);
     }
+
+    // The resume is over without a hand-back, so the old job is finished and a cancel may say so.
+    private static void AssertCancelSaysAlreadyFinished(SwarmTools tools, JobState old)
+    {
+        using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+    }
+
+    private static string BeingResumed(JobState old, JobState replacement) =>
+        $"job {old.Id} is being resumed as {replacement.Id} and its container has not started yet; " +
+        $"try again in a moment, or cancel_job {replacement.Id} to stop the resumed run";
 
     // A watchdog only: a step that is never reached fails the test instead of hanging the suite.
     private static Task Finished(Task task) => task.WaitAsync(TimeSpan.FromSeconds(30));

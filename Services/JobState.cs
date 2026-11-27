@@ -59,8 +59,10 @@ public sealed class JobState
     public CancellationTokenSource? Cts { get; set; }
 
     /// <summary>The pause that resume_job superseded, and the replacement it launched, kept so that a
-    /// replacement which never starts can hand this job back (<see cref="RestorePause"/>). Null once it
-    /// has been handed back, or a cancel_job has given the hand-back up. Not serialized.</summary>
+    /// replacement which never starts can hand this job back (<see cref="RestorePause"/>). Set only
+    /// while that launch is undecided: null once the job has been handed back, or once the replacement
+    /// has started or its run ended without a failed launch (<see cref="EndSupersededPause"/>); from
+    /// then on the job is finished for good. Not serialized.</summary>
     [JsonIgnore]
     public (string ReplacementId, DateTimeOffset? PausedUtc)? SupersededPause { get; set; }
 
@@ -85,10 +87,11 @@ public sealed class JobState
     /// with <paramref name="failure"/> as the reason and a grace window that starts again at
     /// <paramref name="now"/>. Only the first <see cref="JobRecovery.MaxGraceRestarts"/> hand-backs restart
     /// it; after that the job keeps the window it had, so failed resumes cannot keep it alive forever.
-    /// Returns false, and changes nothing, when no superseded pause is left.</summary>
-    public bool RestorePause(string failure, DateTimeOffset now)
+    /// Returns false, and changes nothing, unless <paramref name="replacementId"/>'s launch is the one
+    /// still undecided.</summary>
+    public bool RestorePause(string replacementId, string failure, DateTimeOffset now)
     {
-        if (SupersededPause is not { } pause)
+        if (SupersededPause is not { } pause || pause.ReplacementId != replacementId)
             return false;
         HandBacks++;
         var restart = HandBacks <= JobRecovery.MaxGraceRestarts;
@@ -100,6 +103,15 @@ public sealed class JobState
         FinishedUtc = null;
         SupersededPause = null;
         return true;
+    }
+
+    /// <summary><paramref name="replacementId"/>'s launch is decided without a hand-back (its container
+    /// started, or a cancel or a timeout ended it): this job stays superseded for good. Only an
+    /// unserialized field changes, so there is nothing to persist.</summary>
+    public void EndSupersededPause(string replacementId)
+    {
+        if (SupersededPause?.ReplacementId == replacementId)
+            SupersededPause = null;
     }
 }
 

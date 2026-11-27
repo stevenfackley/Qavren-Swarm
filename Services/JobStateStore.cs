@@ -78,6 +78,20 @@ public sealed class JobStateStore
         }
     }
 
+    /// <summary>Like <see cref="Update"/>, but persists the job only when <paramref name="mutate"/> returns
+    /// true. For a step that reads the job under its lock to decide what to do, and may leave it as it
+    /// was or change only fields that are not serialized.</summary>
+    public void UpdateIf(string id, Func<JobState, bool> mutate)
+    {
+        if (!_jobs.TryGetValue(id, out var job))
+            return;
+        lock (job)
+        {
+            if (mutate(job))
+                Persist(job);
+        }
+    }
+
     /// <summary>Like <see cref="Update"/>, but only while the job is still in one of
     /// <paramref name="allowedFrom"/>. The status is checked under the same per-job lock as the
     /// mutation, so of two callers racing to move one job only the first acts. Returns false, and

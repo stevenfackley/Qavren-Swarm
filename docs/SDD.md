@@ -83,9 +83,11 @@ timed out but is kept recoverable; see §4.4 and §9). `JobState` is the mutable
   multi‑field writes are atomic and the on‑disk copy tracks memory.
 - `TryTransition(id, allowedFrom, Action<JobState>)` is `Update` with a guard: it checks the status
   under the same `lock (job)` and returns `false` without mutating when the job has already moved on.
-  Every move out of `Paused` (resume, discard, reap) goes through it, so two tool calls racing on one
+  Every move out of `Paused` (resume, reap) goes through it, so two tool calls racing on one
   job cannot both act. So does the one move back into `Paused`, the hand‑back of a superseded job
   (§4.6).
+- `UpdateIf(id, Func<JobState,bool>)` runs a decision under the same lock and persists only when it
+  returns `true`. `cancel_job` (which includes the discard of a `Paused` job) and `Settle` use it.
 - `All()` returns a snapshot array for `list_jobs`.
 - **On construction**, `LoadFromDisk()` reads every `*.json`; a job still `Pending`/`Running` (its
   container and background task gone with the previous process) is marked `Failed` with
@@ -111,7 +113,8 @@ Owns the container lifecycle.
      colon; `ExtraHosts = ["host.docker.internal:host-gateway"]`; `AutoRemove=false`;
      `CapDrop=["ALL"]`; `SecurityOpt=["no-new-privileges:true"]`; `PidsLimit`, `Memory`, `NanoCPUs`
      from config; optional `NetworkMode`.
-  4. `StartContainerAsync`; `WaitContainerAsync` (honours `ct` → timeout/cancel).
+  4. `StartContainerAsync`, then the optional `onStarted` callback; `WaitContainerAsync` (honours `ct` →
+     timeout/cancel).
   5. `GetContainerLogsAsync(tty:false)` → `MultiplexedStream`; `ReadOutputToEndAsync` demuxes to
      `(stdout, stderr)`.
   6. `ParseAgentOutput(stdout, nonce)` extracts the diff + result JSON. Status = `Completed` if exit
@@ -174,9 +177,14 @@ its deadline is not reaped at once. Only the first `JobRecovery.MaxGraceRestarts
 restart it (`HandBacks` counts them and is persisted); after that the job keeps the window it had and
 its reason says so, so failed resumes cannot keep a job resumable for more than four windows plus the
 launches in between. A handed‑back job that expires is reaped with the relaunch failure in its
-reason (`JobRecovery.ExpiryReason`); a job never handed back is reaped as before. A
-`cancel_job` on the old job while the replacement is starting gives that hand‑back up, so the job
-stays `Failed`; a replacement that started, was cancelled or timed out leaves it `Failed` too. A
+reason (`JobRecovery.ExpiryReason`); a job never handed back is reaped as before. Until the
+replacement's launch is decided the old job keeps `SupersededPause`; `Settle` clears it as soon as the
+container has started (`RunAgentAsync`'s `onStarted`) or the run ends without a failed launch (a
+cancel or a timeout), and from then on the old job is finished for good. `cancel_job` takes its
+answer from one look under the job's lock (`UpdateIf`): `Paused` is discarded; a job whose
+replacement's launch is still undecided is refused with an `McpException` that names the
+replacement ("try again in a moment, or cancel_job <id>"), since a failed launch would bring it
+back; any other finished job reads "job already finished", which nothing can undo. A
 `Paused` job past `PauseGraceSeconds` is **lazily reaped** to `Failed` whenever a tool touches it
 (`ReapIfPauseExpired`, no background timer).
 
@@ -243,7 +251,7 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | `CreatedUtc`/`FinishedUtc`/`PausedUtc` | DateTimeOffset(?) | timestamps; `PausedUtc` drives the pause grace timeout (a hand‑back sets it again) |
 | `HandBacks` | int | times `resume_job` handed the job back after a failed relaunch; bounds the grace‑window restarts |
 | `UserCancelled` | bool | not serialized; set by `cancel_job` so a cancel records `Failed` not `Paused` |
-| `SupersededPause` | (string, DateTimeOffset?)? | not serialized; the replacement's id and the `PausedUtc` that `resume_job` replaced, kept for the hand‑back |
+| `SupersededPause` | (string, DateTimeOffset?)? | not serialized; the replacement's id and the `PausedUtc` that `resume_job` replaced, kept for the hand‑back and set only while the replacement's launch is undecided |
 | `Cts` | CancellationTokenSource? | not serialized; drives timeout/cancel |
 
 `JobRecovery` (pure, no IO) holds the recovery decisions: `ClassifyInterruption(userCancelled)` →
@@ -267,7 +275,7 @@ applies to a CRLF host file.
 | `spawn_sandbox` | `runtime, workspacePath, task, provider?, model?, thinkingBudget?, baseUrl?` | `{jobId,status,provider,runtime}` | invalid runtime/provider/path, empty task, non‑http `baseUrl` |
 | `check_sandbox_status` | `jobId` | `{jobId,status,provider,runtime,exitCode?,testsPassed,failedHunks,hasChanges,resumable,pausedUtc,error}` | unknown jobId |
 | `list_jobs` | — | `{count,jobs[]}` (newest first; `task` truncated to 80; expired pauses reaped on read) | — |
-| `cancel_job` | `jobId` | `{jobId,cancelling}`, or `{jobId,status,note}` (already finished / Paused discarded) | unknown jobId |
+| `cancel_job` | `jobId` | `{jobId,cancelling}`, or `{jobId,status,note}` (already finished / Paused discarded) | unknown jobId; a job being resumed whose replacement's container has not started |
 | `resume_job` | `jobId` | `{resumedFrom,jobId,status,provider,runtime}` (re‑spawns a Paused job; the old job returns to Paused if the new one fails before its container starts) | unknown jobId, non‑Paused job |
 | `retrieve_diff` | `jobId` | `{jobId,status,testsPassed,failedHunks,diff}` or running/paused note | unknown jobId |
 | `retrieve_logs` | `jobId` | `{jobId,status,error,stderrTail}` (captured agent diagnostics) | unknown jobId |
