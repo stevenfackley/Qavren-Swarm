@@ -45,8 +45,11 @@ public sealed class JobState
     /// A hand-back sets it again (<see cref="RestorePause"/>), which restarts the window.</summary>
     public DateTimeOffset? PausedUtc { get; set; }
     /// <summary>How many times resume_job handed this job back because its replacement never started.
-    /// Bounds the grace-window restarts (<see cref="JobRecovery.MaxGraceRestarts"/>), so it is persisted.</summary>
+    /// A record only, and what picks the reap reason (<see cref="JobRecovery.ExpiryReason"/>).</summary>
     public int HandBacks { get; set; }
+    /// <summary>The replacement resume_job launched for this job, while this job is superseded by it.
+    /// Cleared by a hand-back.</summary>
+    public string? ResumedAs { get; set; }
 
     /// <summary>True once cancel_job asked this run to stop, so a cancellation is recorded as a user
     /// cancel (Failed) rather than mistaken for a hang (Paused). Not serialized.</summary>
@@ -58,13 +61,12 @@ public sealed class JobState
     [JsonIgnore]
     public CancellationTokenSource? Cts { get; set; }
 
-    /// <summary>The pause that resume_job superseded, and the replacement it launched, kept so that a
-    /// replacement which never starts can hand this job back (<see cref="RestorePause"/>). Set only
-    /// while that launch is undecided: null once the job has been handed back, or once the replacement
-    /// has started or its run ended without a failed launch (<see cref="EndSupersededPause"/>); from
-    /// then on the job is finished for good. Not serialized.</summary>
+    /// <summary>True while the launch of <see cref="ResumedAs"/> is undecided, so a replacement that
+    /// never starts can still hand this job back (<see cref="RestorePause"/>). False once the job has
+    /// been handed back, or once the replacement has started or its run ended without a failed launch
+    /// (<see cref="SettleResume"/>); from then on the job is finished for good. Not serialized.</summary>
     [JsonIgnore]
-    public (string ReplacementId, DateTimeOffset? PausedUtc)? SupersededPause { get; set; }
+    public bool ResumeUndecided { get; set; }
 
     /// <summary>Move to the terminal <see cref="JobStatus.Failed"/> state. The status, the reason and
     /// the finish time are always written together.</summary>
@@ -76,56 +78,49 @@ public sealed class JobState
     }
 
     /// <summary>Mark a Paused job superseded by its resume_job replacement: <see cref="JobStatus.Failed"/>,
-    /// with the pause it leaves remembered in <see cref="SupersededPause"/>.</summary>
+    /// with the replacement's launch undecided until <see cref="RestorePause"/> or <see cref="SettleResume"/>.</summary>
     public void Supersede(string replacementId, DateTimeOffset now)
     {
-        SupersededPause = (replacementId, PausedUtc);
+        ResumedAs = replacementId;
+        ResumeUndecided = true;
         Fail($"resumed as {replacementId}", now);
     }
 
     /// <summary>Undo <see cref="Supersede"/> after a failed relaunch: <see cref="JobStatus.Paused"/> again,
     /// with <paramref name="failure"/> as the reason and a grace window that starts again at
-    /// <paramref name="now"/>. Only the first <see cref="JobRecovery.MaxGraceRestarts"/> hand-backs restart
-    /// it; after that the job keeps the window it had, so failed resumes cannot keep it alive forever.
-    /// Returns false, and changes nothing, unless <paramref name="replacementId"/>'s launch is the one
-    /// still undecided.</summary>
+    /// <paramref name="now"/>. Every hand-back restarts it: only an explicit resume_job leads to one, so
+    /// the caller bounds how often. Returns false, and changes nothing, unless
+    /// <paramref name="replacementId"/>'s launch is the one still undecided.</summary>
     public bool RestorePause(string replacementId, string failure, DateTimeOffset now)
     {
-        if (SupersededPause is not { } pause || pause.ReplacementId != replacementId)
+        if (!ResumeUndecided || ResumedAs != replacementId)
             return false;
         HandBacks++;
-        var restart = HandBacks <= JobRecovery.MaxGraceRestarts;
         // The time and the reason before the status, so a status read that takes no lock does not
         // pair Paused with the expiry from before the hand-back. The reaper does not rely on this: it
         // decides under the lock.
-        PausedUtc = restart ? now : pause.PausedUtc;
-        Error = restart
-            ? failure
-            : $"{failure}; grace window not restarted (already restarted {JobRecovery.MaxGraceRestarts} times)";
+        PausedUtc = now;
+        Error = failure;
         FinishedUtc = null;
+        ResumedAs = null;
+        ResumeUndecided = false;
         Status = JobStatus.Paused;
-        SupersededPause = null;
         return true;
     }
 
     /// <summary><paramref name="replacementId"/>'s launch is decided without a hand-back (its container
     /// started, or a cancel or a timeout ended it): this job stays superseded for good. Only an
     /// unserialized field changes, so there is nothing to persist.</summary>
-    public void EndSupersededPause(string replacementId)
+    public void SettleResume(string replacementId)
     {
-        if (SupersededPause?.ReplacementId == replacementId)
-            SupersededPause = null;
+        if (ResumedAs == replacementId)
+            ResumeUndecided = false;
     }
 }
 
 /// <summary>Pure decision helpers for hung-container recovery — no IO, fully unit-testable.</summary>
 public static class JobRecovery
 {
-    /// <summary>How many hand-backs restart a job's grace window. Each one follows a resume whose launch
-    /// failed, and a launch ends within the wall-clock cap, so a job stays resumable for at most
-    /// <c>MaxGraceRestarts + 1</c> grace windows plus the launches in between.</summary>
-    public const int MaxGraceRestarts = 3;
-
     /// <summary>True for <see cref="JobStatus.Completed"/> and <see cref="JobStatus.Failed"/>: the run is
     /// over and nothing moves the job on. <see cref="JobStatus.Paused"/> is not terminal, since a
     /// Paused job can still be resumed or discarded. The one way back out of Failed is

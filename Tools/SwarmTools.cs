@@ -193,7 +193,7 @@ public sealed class SwarmTools
             {
                 // Superseded by a resume_job whose replacement has not started: not finished yet,
                 // since a failed launch hands it back.
-                resumingAs = j.SupersededPause?.ReplacementId;
+                resumingAs = j.ResumeUndecided ? j.ResumedAs : null;
                 return false;
             }
             // Mark user-cancel BEFORE cancelling so the run records Failed (cancel), not Paused (hang).
@@ -221,7 +221,7 @@ public sealed class SwarmTools
                  "workspace, task, and provider settings. Returns the new jobId; the old job is marked " +
                  "Failed (superseded). If the new job fails before its container starts (for example " +
                  "Docker is not running), the old job goes back to Paused and can be resumed again; its " +
-                 "grace window starts again, at most 3 times. " +
+                 "grace window starts again. " +
                  "Only Paused jobs can be resumed.")]
     public string ResumeJob(
         [Description("The Paused jobId to resume.")] string jobId)
@@ -265,7 +265,7 @@ public sealed class SwarmTools
     private void Settle(JobState superseded, JobState replacement) =>
         _store.UpdateIf(superseded.Id, j =>
         {
-            j.EndSupersededPause(replacement.Id);
+            j.SettleResume(replacement.Id);
             return false;
         });
 

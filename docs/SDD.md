@@ -173,12 +173,13 @@ container. If the replacement fails before its container starts (Docker down; th
 create or the start threw) and nobody cancelled it, `HandBack` puts the old job back to `Paused`,
 resumable again, with the failed relaunch as its reason ("resume as <id> never started (<error>)") and
 `PausedUtc` set to the hand‑back time, which restarts the grace window: a job handed back just before
-its deadline is not reaped at once. Only the first `JobRecovery.MaxGraceRestarts` (3) hand‑backs
-restart it (`HandBacks` counts them and is persisted); after that the job keeps the window it had and
-its reason says so, so failed resumes cannot keep a job resumable for more than four windows plus the
-launches in between. A handed‑back job that expires is reaped with the relaunch failure in its
-reason (`JobRecovery.ExpiryReason`); a job never handed back is reaped as before. Until the
-replacement's launch is decided the old job keeps `SupersededPause`; `Settle` clears it as soon as the
+its deadline is not reaped at once. Every hand‑back restarts it. Nothing resumes a job on its own:
+the only caller of `BeginResume` is the `resume_job` tool, so each restart follows an explicit call
+and the caller bounds how often; without another call the job is reaped one window after its last
+hand‑back. `HandBacks` (persisted) counts the hand‑backs as a record. A handed‑back job that
+expires is reaped with the relaunch failure in its reason (`JobRecovery.ExpiryReason`); a job never
+handed back is reaped as before. Until the replacement's launch is decided the old job has
+`ResumeUndecided` set (with the replacement's id in `ResumedAs`); `Settle` clears it as soon as the
 container has started (`RunAgentAsync`'s `onStarted`) or the run ends without a failed launch (a
 cancel or a timeout), and from then on the old job is finished for good. `cancel_job` takes its
 answer from one look under the job's lock (`UpdateIf`): `Paused` is discarded; a job whose
@@ -250,18 +251,21 @@ Stdlib‑only at import (SDKs imported lazily inside the provider functions). Pi
 | `Error` | string? | failure reason |
 | `Model`/`ThinkingBudget`/`BaseUrl` | string?/int?/string? | spawn params retained so `resume_job` re‑spawns faithfully |
 | `CreatedUtc`/`FinishedUtc`/`PausedUtc` | DateTimeOffset(?) | timestamps; `PausedUtc` drives the pause grace timeout (a hand‑back sets it again) |
-| `HandBacks` | int | times `resume_job` handed the job back after a failed relaunch; bounds the grace‑window restarts |
+| `HandBacks` | int | times `resume_job` handed the job back after a failed relaunch; a record, and it picks the reap reason |
+| `ResumedAs` | string? | the replacement `resume_job` launched while this job is superseded by it; cleared by a hand‑back |
 | `UserCancelled` | bool | not serialized; set by `cancel_job` so a cancel records `Failed` not `Paused` |
-| `SupersededPause` | (string, DateTimeOffset?)? | not serialized; the replacement's id and the `PausedUtc` that `resume_job` replaced, kept for the hand‑back and set only while the replacement's launch is undecided |
+| `ResumeUndecided` | bool | not serialized; true while the launch of `ResumedAs` is undecided, so a hand‑back is still possible |
 | `Cts` | CancellationTokenSource? | not serialized; drives timeout/cancel |
 
 `JobRecovery` (pure, no IO) holds the recovery decisions: `ClassifyInterruption(userCancelled)` →
 `(Failed,"cancelled by user")` or `(Paused, "container hung…")`, `IsPauseExpired(job, grace, now)`,
-`ExpiryReason(job)`, `MaxGraceRestarts`, and the `JobStatus.IsTerminal()` extension
-(`Completed`/`Failed`; `Paused` is not terminal).
+`ExpiryReason(job)`, and the `JobStatus.IsTerminal()` extension (`Completed`/`Failed`; `Paused` is
+not terminal).
 `JobState.Fail(error, now)` is the one write of the `Failed` state: status, reason and `FinishedUtc`
-together. `Supersede(replacementId, now)` is `Fail` for a resumed job that also remembers the pause,
-and `RestorePause(failure, now)` undoes it with a restarted grace window: the only move out of `Failed`.
+together. `Supersede(replacementId, now)` is `Fail` for a resumed job that also records the
+replacement and marks its launch undecided; `RestorePause(replacementId, failure, now)` undoes it with
+a restarted grace window, the only move out of `Failed`, and `SettleResume(replacementId)` ends the
+undecided state without one.
 `UnifiedDiffSplitter` (pure) decomposes a unified diff into per‑file `DiffFile { Path, Header, Hunks }`
 and recomposes any subset of hunks (`Recompose`/`SingleHunkPatch`) — the core of hunk‑by‑hunk apply
 and the rejected‑patch export; it preserves bytes (CRs included) so a reconstructed sub‑patch still

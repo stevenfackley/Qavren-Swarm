@@ -131,11 +131,12 @@ public class ResumeLaunchTests
             Assert.Equal(JobStatus.Paused, r.Status);
             Assert.Equal($"resume as {fresh.Id} never started (IOException: docker is down)", r.Error);
             Assert.Equal(clock.GetUtcNow(), r.PausedUtc);
-            // The count of hand-backs survives a restart, so a restart does not reset the bound on them.
+            // The count of hand-backs survives a restart, so a reaped job's reason still says what happened.
             Assert.Equal(1, r.HandBacks);
+            Assert.Null(r.ResumedAs);
             Assert.Null(r.FinishedUtc);
-            // The remembered pause is bookkeeping for this process only: the job file keeps its shape.
-            Assert.DoesNotContain("SupersededPause", File.ReadAllText(Path.Combine(dir, old.Id + ".json")));
+            // Whether a launch is undecided is bookkeeping for this process only.
+            Assert.DoesNotContain("ResumeUndecided", File.ReadAllText(Path.Combine(dir, old.Id + ".json")));
         }
         finally
         {
@@ -227,37 +228,32 @@ public class ResumeLaunchTests
     }
 
     [Fact]
-    public async Task Repeated_failed_resumes_cannot_keep_a_job_alive_without_bound()
+    public async Task Each_failed_resume_restarts_the_window_and_only_another_resume_extends_it()
     {
+        // Only resume_job hands a job back, so the caller is what bounds how often its window
+        // restarts: without another call the job is reaped one window after the last hand-back.
         var clock = new FakeClock();
         var (store, tools) = NewTools(new FakeDocker { Create = _ => throw new IOException("docker is down") }, clock: clock);
         var old = Paused(store);
-        // However often it is resumed, a job's last chance is at most this many windows after it paused.
-        var latestDeadline = PausedAt + Grace * (JobRecovery.MaxGraceRestarts + 1);
-        var restartedAt = PausedAt;
         JobState? fresh = null;
 
-        for (var attempt = 1; attempt <= JobRecovery.MaxGraceRestarts + 1; attempt++)
+        for (var attempt = 1; attempt <= 5; attempt++)
         {
             clock.Advance(Grace - TimeSpan.FromSeconds(1));   // each resume just before the deadline
             (fresh, var run) = tools.BeginResume(old.Id);
             await Finished(run);
 
             Assert.Equal("Paused", StatusOf(tools, old));
-            if (attempt <= JobRecovery.MaxGraceRestarts)
-                restartedAt = clock.GetUtcNow();
-            Assert.Equal(restartedAt, old.PausedUtc);
-            Assert.True(old.PausedUtc + Grace <= latestDeadline);
+            Assert.Equal(clock.GetUtcNow(), old.PausedUtc);
+            Assert.Equal(attempt, old.HandBacks);
+            Assert.Equal($"resume as {fresh.Id} never started (IOException: docker is down)", old.Error);
         }
 
-        // The last hand-back left the window where the last restart put it, and says so.
-        Assert.Equal($"resume as {fresh!.Id} never started (IOException: docker is down); " +
-                     $"grace window not restarted (already restarted {JobRecovery.MaxGraceRestarts} times)", old.Error);
-        clock.Advance(Grace - TimeSpan.FromSeconds(1));
-        Assert.True(clock.GetUtcNow() > restartedAt + Grace);
+        clock.Advance(Grace);
+        Assert.Equal("Paused", StatusOf(tools, old));
+        clock.Advance(TimeSpan.FromTicks(1));
         AssertResumeRefused(tools, old);
-        Assert.Equal($"paused job expired: resume as {fresh.Id} never started (IOException: docker is down); " +
-                     $"grace window not restarted (already restarted {JobRecovery.MaxGraceRestarts} times); " +
+        Assert.Equal($"paused job expired: resume as {fresh!.Id} never started (IOException: docker is down); " +
                      "not resumed again within the grace window", old.Error);
     }
 
