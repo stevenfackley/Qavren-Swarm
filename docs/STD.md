@@ -148,6 +148,7 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 | 63 | `Cancel_of_the_old_job_once_the_replacement_has_started_is_already_finished_for_good` | once the replacement's container has started (and while it still runs) a cancel of the old job reads "job already finished", and it stays finished |
 | 64 | `Cancel_racing_a_resume_is_never_told_finished_and_then_undone` | 300 rounds of `cancel_job` and `resume_job` released together on one Paused job: an acknowledged cancel always ends `Failed` ("paused job discarded"); a refused one names the replacement, and the job comes back `Paused` |
 | 65 | `Status_reads_during_a_hand_back_never_reap_the_job_whose_window_it_restarts` | 2000 rounds of a launch that fails after the old deadline while a thread polls `check_sandbox_status`: the job always ends `Paused` |
+| 66 | `Cancel_of_the_replacement_before_its_launch_has_a_cancellation_handle_stops_it_before_it_starts` | a cancel between `PrepareResume` and the launch makes no Docker call; the replacement ends "cancelled by user" and the old job is finished for good |
 
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 

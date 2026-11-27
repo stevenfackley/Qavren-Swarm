@@ -83,7 +83,17 @@ public sealed class SwarmTools
     {
         // Wall-clock cap so a hung container/model can't pin the job in Running forever.
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.JobTimeoutSeconds));
-        job.Cts = cts;
+        // Publish the handle under the job's lock. A cancel_job that came before it existed could only
+        // set the flag, so honour that flag now: the run then stops before its first Docker call.
+        var cancelledEarly = false;
+        _store.UpdateIf(job.Id, j =>
+        {
+            j.Cts = cts;
+            cancelledEarly = j.UserCancelled;
+            return false;
+        });
+        if (cancelledEarly)
+            cts.Cancel();
         return Task.Run(async () =>
         {
             try
@@ -169,8 +179,8 @@ public sealed class SwarmTools
     [McpServerTool(Name = "cancel_job")]
     [Description("Request cancellation of a Pending/Running job (stops + removes the container, marks " +
                  "it Failed), or discard a Paused (hung) job. A job that resume_job is re-spawning, whose " +
-                 "new container has not started yet, is refused with an error that names the new job: " +
-                 "try again in a moment, or cancel the new job.")]
+                 "new container has not started yet, is refused with an error that names the new job; " +
+                 "cancel_job on the new job stops it, from the moment it exists.")]
     public string CancelJob(
         [Description("The jobId to cancel.")] string jobId)
     {
@@ -180,6 +190,7 @@ public sealed class SwarmTools
         // reaper all move the job, so an answer pieced together from separate reads can be false.
         var status = job.Status;
         string? resumingAs = null;
+        CancellationTokenSource? cts = null;
         _store.UpdateIf(jobId, j =>
         {
             status = j.Status;
@@ -197,7 +208,10 @@ public sealed class SwarmTools
                 return false;
             }
             // Mark user-cancel BEFORE cancelling so the run records Failed (cancel), not Paused (hang).
+            // The handle is read under the same lock it is published under (LaunchRun): either it is
+            // here, or the launch will see the flag.
             j.UserCancelled = true;
+            cts = j.Cts;
             return true;
         });
         if (status == JobStatus.Paused)
@@ -206,11 +220,11 @@ public sealed class SwarmTools
             return Json(new { jobId, status = JobStatus.Failed.ToString(), note = "paused job discarded" });
         }
         if (resumingAs is not null)
-            throw new McpException($"job {jobId} is being resumed as {resumingAs} and its container has not started yet; " +
-                                   $"try again in a moment, or cancel_job {resumingAs} to stop the resumed run");
+            throw new McpException($"job {jobId} is being resumed as {resumingAs}, whose container has not started yet; " +
+                                   $"cancel_job {resumingAs} stops it");
         if (status.IsTerminal())
             return Json(new { jobId, status = status.ToString(), note = "job already finished" });
-        try { job.Cts?.Cancel(); }
+        try { cts?.Cancel(); }
         catch (ObjectDisposedException) { /* run is already completing */ }
         _log.LogInformation("Cancellation requested for job {Id}", jobId);
         return Json(new { jobId, cancelling = true });
@@ -240,10 +254,15 @@ public sealed class SwarmTools
         ReapIfPauseExpired(job);
 
         var fresh = PrepareResume(job);
-        var run = LaunchRun(fresh, onNeverStarted: () => HandBack(job, fresh), onSettled: () => Settle(job, fresh));
+        var run = LaunchResume(job, fresh);
         _log.LogInformation("Resumed job {Old} as {New}", jobId, fresh.Id);
         return (fresh, run);
     }
+
+    /// <summary>Launch the replacement <see cref="PrepareResume"/> created, wired to hand the old job back
+    /// or settle it. Separate from <see cref="BeginResume"/> so a test can act between the two steps.</summary>
+    internal Task LaunchResume(JobState superseded, JobState replacement) =>
+        LaunchRun(replacement, onNeverStarted: () => HandBack(superseded, replacement), onSettled: () => Settle(superseded, replacement));
 
     /// <summary>The replacement never ran, so the resume took the work nowhere: put the job it
     /// superseded back to Paused, resumable again, with the failed relaunch as its reason and its grace

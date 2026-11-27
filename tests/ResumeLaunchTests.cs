@@ -482,6 +482,28 @@ public class ResumeLaunchTests
     }
 
     [Fact]
+    public async Task Cancel_of_the_replacement_before_its_launch_has_a_cancellation_handle_stops_it_before_it_starts()
+    {
+        var docker = new FakeDocker();
+        var (store, tools) = NewTools(docker);
+        var old = Paused(store);
+        var fresh = tools.PrepareResume(old);   // the replacement exists; its launch has not begun
+        Assert.Null(fresh.Cts);
+
+        using var doc = JsonDocument.Parse(tools.CancelJob(fresh.Id));
+        Assert.True(doc.RootElement.GetProperty("cancelling").GetBoolean());
+        await Finished(tools.LaunchResume(old, fresh));
+
+        Assert.Equal(0, docker.Calls);           // not one Docker call: the run never started
+        Assert.Equal(JobStatus.Failed, fresh.Status);
+        Assert.Equal("cancelled by user", fresh.Error);
+        Assert.NotNull(fresh.FinishedUtc);
+        AssertSuperseded(old, fresh);
+        AssertCancelSaysAlreadyFinished(tools, old);
+        AssertResumeRefused(tools, old);
+    }
+
+    [Fact]
     public async Task Timeout_while_the_replacement_is_starting_pauses_the_replacement_and_keeps_the_old_job_superseded()
     {
         var starting = new Held();
@@ -523,8 +545,8 @@ public class ResumeLaunchTests
     }
 
     private static string BeingResumed(JobState old, JobState replacement) =>
-        $"job {old.Id} is being resumed as {replacement.Id} and its container has not started yet; " +
-        $"try again in a moment, or cancel_job {replacement.Id} to stop the resumed run";
+        $"job {old.Id} is being resumed as {replacement.Id}, whose container has not started yet; " +
+        $"cancel_job {replacement.Id} stops it";
 
     // A watchdog only: a step that is never reached fails the test instead of hanging the suite.
     private static Task Finished(Task task) => task.WaitAsync(TimeSpan.FromSeconds(30));
@@ -588,6 +610,7 @@ public class ResumeLaunchTests
         public Func<CancellationToken, Task> Start = _ => Task.CompletedTask;
         public Func<CancellationToken, Task<long>> Wait = _ => Task.FromResult(0L);
         public int Removed;
+        public int Calls;   // image lookups, creates, starts and waits
 
         public IDockerClient Client { get; }
 
@@ -617,24 +640,30 @@ public class ResumeLaunchTests
 
         private async Task<IList<ImagesListResponse>> ListImages(CancellationToken ct)
         {
+            Interlocked.Increment(ref Calls);
             await Image(ct);
             return [new ImagesListResponse()];
         }
 
         private async Task<CreateContainerResponse> CreateContainer(CancellationToken ct)
         {
+            Interlocked.Increment(ref Calls);
             await Create(ct);
             return new CreateContainerResponse { ID = "c1" };
         }
 
         private async Task<bool> StartContainer(CancellationToken ct)
         {
+            Interlocked.Increment(ref Calls);
             await Start(ct);
             return true;
         }
 
-        private async Task<ContainerWaitResponse> WaitContainer(CancellationToken ct) =>
-            new() { StatusCode = await Wait(ct) };
+        private async Task<ContainerWaitResponse> WaitContainer(CancellationToken ct)
+        {
+            Interlocked.Increment(ref Calls);
+            return new() { StatusCode = await Wait(ct) };
+        }
 
         private Task RemoveContainer()
         {

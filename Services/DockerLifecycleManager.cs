@@ -149,6 +149,9 @@ public sealed class DockerLifecycleManager
         var started = false;
         try
         {
+            // Cancelled before the run began (a cancel_job that came before the job had its handle):
+            // stop here, before any Docker call.
+            ct.ThrowIfCancellationRequested();
             store.Update(job.Id, j => j.Status = JobStatus.Running);
             await EnsureImageAsync(job.Runtime, ct);
 

@@ -70,8 +70,8 @@ public class JobLifecycleTests
 
         var ex = Assert.Throws<McpException>(() => tools.CancelJob(old.Id));
 
-        Assert.Equal($"job {old.Id} is being resumed as {fresh.Id} and its container has not started yet; " +
-                     $"try again in a moment, or cancel_job {fresh.Id} to stop the resumed run", ex.Message);
+        Assert.Equal($"job {old.Id} is being resumed as {fresh.Id}, whose container has not started yet; " +
+                     $"cancel_job {fresh.Id} stops it", ex.Message);
         Assert.Equal(JobStatus.Failed, old.Status);
         Assert.Equal($"resumed as {fresh.Id}", old.Error);
     }

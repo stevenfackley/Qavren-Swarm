@@ -184,8 +184,11 @@ container has started (`RunAgentAsync`'s `onStarted`) or the run ends without a 
 cancel or a timeout), and from then on the old job is finished for good. `cancel_job` takes its
 answer from one look under the job's lock (`UpdateIf`): `Paused` is discarded; a job whose
 replacement's launch is still undecided is refused with an `McpException` that names the
-replacement ("try again in a moment, or cancel_job <id>"), since a failed launch would bring it
-back; any other finished job reads "job already finished", which nothing can undo. A
+replacement ("cancel_job <id> stops it"), since a failed launch would bring it back; any other
+finished job reads "job already finished", which nothing can undo. A cancel of a `Pending`/`Running`
+job sets `UserCancelled` and reads `Cts` under the lock, and `LaunchRun` publishes `Cts` under the
+same lock and cancels it at once if the flag is already set, so a cancel that lands before the
+handle exists still stops the run: `RunAgentAsync` checks the token before its first Docker call. A
 `Paused` job past `PauseGraceSeconds` is **lazily reaped** to `Failed` whenever a tool touches it
 (`ReapIfPauseExpired`, no background timer). The expiry is judged under the job's lock, so a read
 that lands during a hand‑back cannot reap the job on the expiry it had before its window restarted.
