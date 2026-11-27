@@ -218,6 +218,28 @@ public class JobLifecycleTests
         }
     }
 
+    [Fact]
+    public void After_a_restart_a_superseded_job_reads_finished_and_names_its_replacement()
+    {
+        var s1 = NewStore(persist: true, out var dir);
+        try
+        {
+            var old = Paused(s1, DateTimeOffset.UtcNow);
+            var fresh = NewTools(s1).tools.PrepareResume(old);
+
+            // The undecided launch died with the process; nothing can hand the old job back now.
+            var (_, tools) = NewTools(new JobStateStore(persist: true, dir, NullLogger<JobStateStore>.Instance));
+            using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
+
+            Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal($"job already finished; resumed as {fresh.Id}", doc.RootElement.GetProperty("note").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     // --- a run that throws ------------------------------------------------ //
 
     [Fact]
@@ -360,9 +382,9 @@ public class JobLifecycleTests
         return new JobStateStore(persist, dir, NullLogger<JobStateStore>.Instance);
     }
 
-    private static (JobStateStore store, SwarmTools tools) NewTools()
+    private static (JobStateStore store, SwarmTools tools) NewTools(JobStateStore? store = null)
     {
-        var store = NewStore(persist: false, out _);
+        store ??= NewStore(persist: false, out _);
         var docker = new DockerLifecycleManager(docker: null!, new SwarmConfig(), NullLogger<DockerLifecycleManager>.Instance);
         var tools = new SwarmTools(store, docker, new SwarmConfig(), NullLogger<SwarmTools>.Instance);
         return (store, tools);

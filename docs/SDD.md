@@ -185,7 +185,8 @@ cancel or a timeout), and from then on the old job is finished for good. `cancel
 answer from one look under the job's lock (`UpdateIf`): `Paused` is discarded; a job whose
 replacement's launch is still undecided is refused with an `McpException` that names the
 replacement ("cancel_job <id> stops it"), since a failed launch would bring it back; any other
-finished job reads "job already finished", which nothing can undo. A cancel of a `Pending`/`Running`
+finished job reads "job already finished", which nothing can undo, with "; resumed as <id>" added
+when its work went on as a replacement (`ResumedAs`, persisted, so this holds after a restart). A cancel of a `Pending`/`Running`
 job sets `UserCancelled` and reads `Cts` under the lock, and `LaunchRun` publishes `Cts` under the
 same lock and cancels it at once if the flag is already set, so a cancel that lands before the
 handle exists still stops the run: `RunAgentAsync` checks the token before its first Docker call. A
@@ -283,7 +284,7 @@ applies to a CRLF host file.
 | `spawn_sandbox` | `runtime, workspacePath, task, provider?, model?, thinkingBudget?, baseUrl?` | `{jobId,status,provider,runtime}` | invalid runtime/provider/path, empty task, non‑http `baseUrl` |
 | `check_sandbox_status` | `jobId` | `{jobId,status,provider,runtime,exitCode?,testsPassed,failedHunks,hasChanges,resumable,pausedUtc,error}` | unknown jobId |
 | `list_jobs` | — | `{count,jobs[]}` (newest first; `task` truncated to 80; expired pauses reaped on read) | — |
-| `cancel_job` | `jobId` | `{jobId,cancelling}`, or `{jobId,status,note}` (already finished / Paused discarded) | unknown jobId; a job being resumed whose replacement's container has not started |
+| `cancel_job` | `jobId` | `{jobId,cancelling}`, or `{jobId,status,note}` (already finished, naming the replacement of a resumed job / Paused discarded) | unknown jobId; a job being resumed whose replacement's container has not started |
 | `resume_job` | `jobId` | `{resumedFrom,jobId,status,provider,runtime}` (re‑spawns a Paused job; the old job returns to Paused if the new one fails before its container starts) | unknown jobId, non‑Paused job |
 | `retrieve_diff` | `jobId` | `{jobId,status,testsPassed,failedHunks,diff}` or running/paused note | unknown jobId |
 | `retrieve_logs` | `jobId` | `{jobId,status,error,stderrTail}` (captured agent diagnostics) | unknown jobId |

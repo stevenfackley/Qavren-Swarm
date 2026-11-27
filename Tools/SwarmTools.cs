@@ -189,7 +189,7 @@ public sealed class SwarmTools
         // One look under the job's lock decides the answer: resume_job, its hand-back and the pause
         // reaper all move the job, so an answer pieced together from separate reads can be false.
         var status = job.Status;
-        string? resumingAs = null;
+        string? resumingAs = null, resumedAs = null;
         CancellationTokenSource? cts = null;
         _store.UpdateIf(jobId, j =>
         {
@@ -205,6 +205,7 @@ public sealed class SwarmTools
                 // Superseded by a resume_job whose replacement has not started: not finished yet,
                 // since a failed launch hands it back.
                 resumingAs = j.ResumeUndecided ? j.ResumedAs : null;
+                resumedAs = j.ResumedAs;
                 return false;
             }
             // Mark user-cancel BEFORE cancelling so the run records Failed (cancel), not Paused (hang).
@@ -222,8 +223,11 @@ public sealed class SwarmTools
         if (resumingAs is not null)
             throw new McpException($"job {jobId} is being resumed as {resumingAs}, whose container has not started yet; " +
                                    $"cancel_job {resumingAs} stops it");
+        // A superseded job is finished, but its work goes on as the replacement: say where, so a caller
+        // who meant to stop the work can.
         if (status.IsTerminal())
-            return Json(new { jobId, status = status.ToString(), note = "job already finished" });
+            return Json(new { jobId, status = status.ToString(),
+                note = resumedAs is null ? "job already finished" : $"job already finished; resumed as {resumedAs}" });
         try { cts?.Cancel(); }
         catch (ObjectDisposedException) { /* run is already completing */ }
         _log.LogInformation("Cancellation requested for job {Id}", jobId);

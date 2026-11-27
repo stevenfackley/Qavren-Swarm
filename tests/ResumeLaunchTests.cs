@@ -373,7 +373,7 @@ public class ResumeLaunchTests
         }
         else
         {
-            Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+            Assert.Equal(FinishedAs(fresh), doc.RootElement.GetProperty("note").GetString());
             Assert.Equal(JobStatus.Completed, fresh.Status);
             AssertSuperseded(old, fresh);
         }
@@ -392,8 +392,10 @@ public class ResumeLaunchTests
 
         using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
 
+        // Finished, and the note says where the work went, so a caller who meant to stop it can.
         Assert.Equal("Failed", doc.RootElement.GetProperty("status").GetString());
-        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+        Assert.Equal(FinishedAs(fresh), doc.RootElement.GetProperty("note").GetString());
+        Assert.Equal(JobStatus.Running, fresh.Status);
         running.Release();
         await Finished(run);
         Assert.Equal(JobStatus.Completed, fresh.Status);
@@ -478,7 +480,7 @@ public class ResumeLaunchTests
         Assert.Equal(JobStatus.Failed, fresh.Status);
         Assert.Equal(error, fresh.Error);
         AssertSuperseded(old, fresh);
-        AssertCancelSaysAlreadyFinished(tools, old);
+        AssertCancelSaysAlreadyFinished(tools, old, fresh);
     }
 
     [Fact]
@@ -499,7 +501,7 @@ public class ResumeLaunchTests
         Assert.Equal("cancelled by user", fresh.Error);
         Assert.NotNull(fresh.FinishedUtc);
         AssertSuperseded(old, fresh);
-        AssertCancelSaysAlreadyFinished(tools, old);
+        AssertCancelSaysAlreadyFinished(tools, old, fresh);
         AssertResumeRefused(tools, old);
     }
 
@@ -519,7 +521,7 @@ public class ResumeLaunchTests
         Assert.Equal(HungReason, fresh.Error);
         AssertSuperseded(old, fresh);
         Assert.Single(store.All(), j => j.Status == JobStatus.Paused);   // one resumable job, not two
-        AssertCancelSaysAlreadyFinished(tools, old);
+        AssertCancelSaysAlreadyFinished(tools, old, fresh);
     }
 
     // --- helpers ---------------------------------------------------------- //
@@ -538,11 +540,13 @@ public class ResumeLaunchTests
     }
 
     // The resume is over without a hand-back, so the old job is finished and a cancel may say so.
-    private static void AssertCancelSaysAlreadyFinished(SwarmTools tools, JobState old)
+    private static void AssertCancelSaysAlreadyFinished(SwarmTools tools, JobState old, JobState replacement)
     {
         using var doc = JsonDocument.Parse(tools.CancelJob(old.Id));
-        Assert.Equal("job already finished", doc.RootElement.GetProperty("note").GetString());
+        Assert.Equal(FinishedAs(replacement), doc.RootElement.GetProperty("note").GetString());
     }
+
+    private static string FinishedAs(JobState replacement) => $"job already finished; resumed as {replacement.Id}";
 
     private static string BeingResumed(JobState old, JobState replacement) =>
         $"job {old.Id} is being resumed as {replacement.Id}, whose container has not started yet; " +
