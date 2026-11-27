@@ -36,7 +36,7 @@ providers and the security/robustness controls.
 
 ## 4. Automated tests
 
-### 4.1 xUnit contract tests — `tests/*.cs` (64 tests, 78 cases, all passing)
+### 4.1 xUnit contract tests — `tests/*.cs` (72 tests, 86 cases, all passing)
 
 `ParseAgentOutput` (host‑side stdout envelope parser):
 
@@ -150,11 +150,14 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 | 64 | `Cancel_racing_a_resume_is_never_told_finished_and_then_undone` | 300 rounds of `cancel_job` and `resume_job` released together on one Paused job: an acknowledged cancel always ends `Failed` ("paused job discarded"); a refused one names the replacement, and the job comes back `Paused` |
 | 65 | `Status_reads_during_a_hand_back_never_reap_the_job_whose_window_it_restarts` | 2000 rounds of a launch that fails after the old deadline while a thread polls `check_sandbox_status`: the job always ends `Paused` |
 | 66 | `Cancel_of_the_replacement_before_its_launch_has_a_cancellation_handle_stops_it_before_it_starts` | a cancel between `PrepareResume` and the launch makes no Docker call; the replacement ends "cancelled by user" and the old job is finished for good |
-| 71 | `Run_that_throws_past_its_own_handling_ends_the_replacement_and_settles_the_old_job` | a launch that fails before start and whose failure log throws: the replacement ends `Failed` ("run ended unexpectedly"), the old job is finished for good, not "being resumed" |
-| 67 | `After_a_restart_a_superseded_job_reads_finished_and_names_its_replacement` (in `JobLifecycleTests.cs`) | `ResumedAs` survives a restart: a cancel of the superseded job reads "job already finished; resumed as <id>" |
-| 68 | `UpdateIf_on_an_unknown_job_returns_false_without_calling_the_decision` (in `JobLifecycleTests.cs`) | unknown id → `false`, decision never run |
-| 69 | `UpdateIf_persists_only_when_the_decision_says_it_changed_the_job` (in `JobLifecycleTests.cs`) | a `false` decision leaves the job file as it was; a `true` one rewrites it |
-| 70 | `Cancel_of_an_evicted_job_is_an_unknown_job` (in `JobLifecycleTests.cs`) | `cancel_job`'s only lookup is the locked one: an evicted id is "unknown jobId", never an answer from a stale read |
+| 67 | `Run_that_throws_past_its_own_handling_ends_the_replacement_and_settles_the_old_job` | a launch that fails before start and whose failure log throws: the replacement ends `Failed` ("run ended unexpectedly"), the old job is finished for good, not "being resumed" |
+| 68 | `After_a_restart_a_superseded_job_reads_finished_and_names_its_replacement` (in `JobLifecycleTests.cs`) | `ResumedAs` survives a restart: a cancel of the superseded job reads "job already finished; resumed as <id>" |
+| 69 | `UpdateIf_on_an_unknown_job_returns_false_without_calling_the_decision` (in `JobLifecycleTests.cs`) | unknown id → `false`, decision never run |
+| 70 | `UpdateIf_persists_only_when_the_decision_says_it_changed_the_job` (in `JobLifecycleTests.cs`) | a `false` decision leaves the job file as it was; a `true` one rewrites it |
+| 71 | `Cancel_of_an_evicted_job_is_an_unknown_job` (in `JobLifecycleTests.cs`) | `cancel_job`'s only lookup is the locked one: an evicted id is "unknown jobId", never an answer from a stale read |
+
+Where a row above says a cancel of the old job reads "job already finished", the note is
+"job already finished; resumed as <id>".
 
 ### 4.2 pytest — `tests/test_agent.py` (6, all passing)
 
@@ -170,7 +173,7 @@ steps a test holds open or fails; rows marked *theory* run once per case:
 ### 4.3 Running
 
 ```powershell
-dotnet test tests/QavrenSwarm.Tests.csproj   # 78 passed
+dotnet test tests/QavrenSwarm.Tests.csproj   # 86 passed
 python -m pytest tests/test_agent.py          # 6 passed
 ```
 
@@ -225,7 +228,7 @@ python -m pytest tests/test_agent.py          # 6 passed
 
 ## 8. Results summary
 
-- **Automated:** 78/78 xUnit + 6/6 pytest passing.
+- **Automated:** 86/86 xUnit + 6/6 pytest passing.
 - **Integration:** IV‑1…IV‑17 all pass; no resource leaks.
 - **Security:** SEC‑1…SEC‑5 behave as designed; the one "critical" finding (`git apply` RCE) was
   empirically refuted on git 2.53.

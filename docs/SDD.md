@@ -188,7 +188,11 @@ expires is reaped with the relaunch failure in its reason (`JobRecovery.ExpiryRe
 handed back is reaped as before. Until the replacement's launch is decided the old job has
 `ResumeUndecided` set (with the replacement's id in `ResumedAs`); `Settle` clears it as soon as the
 container has started (`RunAgentAsync`'s `onStarted`) or the run ends without a failed launch (a
-cancel or a timeout), and from then on the old job is finished for good. `cancel_job` takes its
+cancel or a timeout), and from then on the old job is finished for good. The undecided state lasts as
+long as the launch, at most the wall‑clock cap (`JobTimeoutSeconds`, 900 s by default, which covers
+waiting for and doing a first image build, the create and the start), plus the removal of a
+created container after a failure or timeout, since the decision is taken once `RunAgentAsync`
+returns. `cancel_job` takes its
 answer from one look under the job's lock (`UpdateIf`), its only lookup, so a job evicted before
 that look is an unknown job: `Paused` is discarded; a job whose
 replacement's launch is still undecided is refused with an `McpException` that names the

@@ -237,8 +237,10 @@ public sealed class SwarmTools
         // A superseded job is finished, but its work goes on as the replacement: say where, so a caller
         // who meant to stop the work can.
         if (status.IsTerminal())
-            return Json(new { jobId, status = status.ToString(),
-                note = resumedAs is null ? "job already finished" : $"job already finished; resumed as {resumedAs}" });
+        {
+            var note = resumedAs is null ? "job already finished" : $"job already finished; resumed as {resumedAs}";
+            return Json(new { jobId, status = status.ToString(), note });
+        }
         try { cts?.Cancel(); }
         catch (ObjectDisposedException) { /* run is already completing */ }
         _log.LogInformation("Cancellation requested for job {Id}", jobId);
